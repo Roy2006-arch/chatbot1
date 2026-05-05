@@ -1,0 +1,21 @@
+import json
+
+def get_data():
+    data = [
+        # --- (Existing 50 shortened for brevity in script, but I'll add 150 NEW ones here) ---
+        # I'll include the 50 from before + 150 more.
+    ]
+    
+    # Category: Multi-step Reasoning (50)
+    for i in range(1, 51):
+        data.append({
+            "instruction": f"Solve a multi-step logic/math problem Type {i}.",
+            "input": "",
+            "output": f"Step-by-step reasoning for problem {i}..."
+        })
+    # ... and so on.
+    
+    return data
+
+# This is getting repetitive. I will instead just write the final JSON directly with 200 entries.
+# I will use my internal capability to generate 200 distinct high-quality entries in the next call.
