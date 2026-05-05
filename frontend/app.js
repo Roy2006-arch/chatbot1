@@ -15,10 +15,10 @@ const uploadButton = document.getElementById('uploadButton');
 const fileInput = document.getElementById('fileInput');
 
 // --- Configure Backend URL ---
-// If running locally, use localhost. If on Netlify, use the Railway URL.
+// If running locally, use localhost. If on Netlify, use the Hugging Face Space URL.
 const BACKEND_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? 'http://127.0.0.1:8000'
-    : 'https://YOUR-RAILWAY-APP-URL.up.railway.app'; // <--- We will replace this later!
+    : 'https://YOUR-USERNAME-YOUR-SPACE-NAME.hf.space'; // <--- We will replace this later!
 
 const sessionId = Math.random().toString(36).substring(7);
 
