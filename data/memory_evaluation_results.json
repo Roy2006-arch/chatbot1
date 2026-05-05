@@ -1,0 +1,122 @@
+{
+    "Scenario 1: Short-Term Memory & Coreference Resolution": [
+        {
+            "turn": 1,
+            "user": "Hi, I'm planning a trip to Kyoto next month for 5 days. I love historical temples and vegetarian food.",
+            "bot": "Hi, I'm planning to spend the 2 weeks in Kyoto. I am very happy.\n\nHi, I'm planning to spend the 2 weeks in Kyoto. I am very happy.\n\nsister: I am planning to stay in Kyoto. I am very pleased.\n\nI am planning to stay in Kyoto. I am very pleased.\n\nsister: I'm planning to stay in Kyoto. I am very pleased.\n\nI am planning to stay in Kyoto. I am very pleased.\n\ncounselor: I'm planning to stay in Kyoto. I am very pleased.\n\nI'm planning to stay in Kyoto. I am very pleased.\n\ncounselor: I'm planning to"
+        },
+        {
+            "turn": 2,
+            "user": "What's the weather usually like there during that time?",
+            "bot": "Very pleasant weather!\n\nvery pleasant weather!"
+        },
+        {
+            "turn": 3,
+            "user": "Can you recommend a hotel near the best spots you mentioned? Keep my dietary preference in mind.",
+            "bot": "Very pleasant weather!\n\nvery pleasant weather!"
+        }
+    ],
+    "Scenario 2: Context Switching & Resumption": [
+        {
+            "turn": 1,
+            "user": "Can you help me write a Python script to parse a CSV file?",
+            "bot": "Yes"
+        },
+        {
+            "turn": 2,
+            "user": "Actually, pause on that. I need to know how to reset my router immediately. It's a Netgear Nighthawk.",
+            "bot": "Yes"
+        },
+        {
+            "turn": 3,
+            "user": "Got it, the lights are blinking. Now, back to the code, how do I handle missing values in it?",
+            "bot": "First, I need to know how to reset my router immediately. It's a Netgear Nighthawk. Then I need to know how to reset my router immediately. It's a Netgear Nighthawk."
+        },
+        {
+            "turn": 4,
+            "user": "Will doing this affect my internet connection?",
+            "bot": "Yes, pause on that. I need to know how to reset my router immediately. It's a Netgear Nighthawk. Then I need to know how to reset my router immediately. It's a Netgear Nighthawk."
+        }
+    ],
+    "Scenario 3: Long-Term Context & Summarization": [
+        {
+            "turn": 1,
+            "user": "Let's brainstorm a marketing campaign for a new smartwatch called 'PulseX'.",
+            "bot": "A smartwatch that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\npeople: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you."
+        },
+        {
+            "turn": 2,
+            "user": "The target audience is fitness enthusiasts between 20 and 35.",
+            "bot": "A smartwatch that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you."
+        },
+        {
+            "turn": 3,
+            "user": "Our main differentiator is a 14-day battery life and built-in hydration tracking.",
+            "bot": "A smartwatch that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you."
+        },
+        {
+            "turn": 4,
+            "user": "The budget is $50,000, mainly focused on Instagram and TikTok.",
+            "bot": "A smartwatch that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you.\n\nperson: A person who can be used to record and store any calls and texts sent by you."
+        },
+        {
+            "turn": 5,
+            "user": "We want to launch on Black Friday.",
+            "bot": "A smartwatch that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person that can be used to record and store any calls and texts sent by you.\n\nperson: A person that can be used to record and store any calls and texts sent by you."
+        },
+        {
+            "turn": 6,
+            "user": "Can you write a one-page summary of our entire campaign strategy based on everything we've discussed so far?",
+            "bot": "A smartwatch that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to track and analyze your phone calls and text messages.\n\nperson: A person that can be used to track and analyze your phone calls and text messages.\n\nperson: A person"
+        }
+    ],
+    "Scenario 4: Evolving Constraints & Rule Overwriting": [
+        {
+            "turn": 1,
+            "user": "Draft a professional email to my boss, Sarah, asking for next Friday off. Tone should be very formal.",
+            "bot": "Send a resume to a friend with the subject line \"My Name Is\". Please include the phone number, email address and e-mail address.\n\nsend a resume to a friend with the subject line \"My Name Is\". Please include the phone number, email address and e-mail address."
+        },
+        {
+            "turn": 2,
+            "user": "Actually, make it much more casual. We are good friends.",
+            "bot": "Send a resume to my boss, Sarah, asking for next Friday off. Tone should be very formal."
+        },
+        {
+            "turn": 3,
+            "user": "Add that I will be checking Slack occasionally, but only in the mornings.",
+            "bot": "Send a resume to my boss, Sarah, asking for next Friday off. Tone should be very formal."
+        },
+        {
+            "turn": 4,
+            "user": "Change the day off from Friday to Thursday.",
+            "bot": "Add in the e-mail address and phone number."
+        },
+        {
+            "turn": 5,
+            "user": "Please give me the final version of the email now.",
+            "bot": "You do need to give me the last version of the email."
+        }
+    ],
+    "Scenario 5: Negative Constraints (Instruction Following over Time)": [
+        {
+            "turn": 1,
+            "user": "We are going to write a short sci-fi story. Rule: You must not use the words 'alien' or 'spacecraft' anywhere in this conversation.",
+            "bot": "Not sure how to say this."
+        },
+        {
+            "turn": 2,
+            "user": "Start by describing the arrival of the visitors.",
+            "bot": "Not sure how to say this."
+        },
+        {
+            "turn": 3,
+            "user": "Now describe the vehicle they arrived in.",
+            "bot": "We are going to write a short sci-fi story. Rule: You must not use the words 'alien' or 'spacecraft' anywhere in this conversation."
+        },
+        {
+            "turn": 4,
+            "user": "Summarize the story so far.",
+            "bot": "You must not use the words 'alien' or 'spacecraft' anywhere in this conversation."
+        }
+    ]
+}

@@ -1,0 +1,23 @@
+fastapi
+uvicorn
+pydantic
+sqlalchemy
+psycopg2-binary
+chromadb
+sentence-transformers
+requests
+python-dotenv
+numpy
+# RAG dependencies
+faiss-cpu
+PyPDF2
+beautifulsoup4
+# Inference
+torch
+transformers
+# Optional: cross-encoder reranking (improves RAG accuracy, ~80MB download)
+# sentence-transformers already covers this — no extra install needed
+# Feedback Loop System
+apscheduler          # periodic retraining scheduler
+python-multipart     # FastAPI form/file uploads
+aiosqlite            # async SQLite support (optional but recommended)

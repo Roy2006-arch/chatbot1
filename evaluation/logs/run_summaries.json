@@ -1,0 +1,20 @@
+[
+  {
+    "run_id": "011210a4-9534-4943-a9d9-f57802f0829f",
+    "timestamp_utc": "2026-05-04T20:00:48.080012+00:00",
+    "model_name": "gpt2",
+    "total_evaluated": 1,
+    "bad_responses": 0,
+    "bad_response_rate": 0.0,
+    "avg_scores": {
+      "accuracy": 1.0,
+      "relevance": 0.9118,
+      "coherence": 1.0,
+      "composite": 0.9691
+    },
+    "grade_distribution": {
+      "A": 1
+    },
+    "retrain_candidates": 0
+  }
+]
