@@ -156,24 +156,66 @@ body {
     white-space: pre-wrap;
 }
 
-/* Code Block Formatting */
-pre {
-    background-color: rgba(0, 0, 0, 0.2);
+/* Modern Code Block Formatting */
+.code-block-wrapper {
+    background-color: #1e1e1e;
     border: 1px solid var(--nav-border);
     border-radius: 8px;
-    padding: 12px;
-    overflow-x: auto;
-    margin: 8px 0;
+    margin: 12px 0;
+    overflow: hidden;
+    font-family: 'Inter', sans-serif;
 }
 
-code {
+.code-block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: #2d2d2d;
+    padding: 8px 16px;
+    font-size: 0.8rem;
+    color: #b3b3b3;
+}
+
+.code-lang {
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+}
+
+.copy-btn {
+    background: transparent;
+    border: none;
+    color: #b3b3b3;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    transition: color 0.2s;
+    font-family: inherit;
+}
+
+.copy-btn:hover {
+    color: #ffffff;
+}
+
+.code-block-wrapper pre {
+    margin: 0;
+    padding: 16px;
+    overflow-x: auto;
+    background-color: transparent !important; /* Let highlight.js handle it or inherit */
+    border: none;
+    border-radius: 0;
+}
+
+.code-block-wrapper code {
     font-family: 'Courier New', Courier, monospace;
     font-size: 0.9em;
+    line-height: 1.5;
 }
 
-.user-message pre {
-    background-color: rgba(0, 0, 0, 0.1);
-    border-color: rgba(0, 0, 0, 0.1);
+.user-message .message-content p {
+    margin-bottom: 8px;
 }
 
 /* Typing Animation */

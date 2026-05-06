@@ -1,9 +1,43 @@
-// --- Configure marked.js for safe Markdown rendering ---
+// --- Configure marked.js with Custom Renderer and Highlight.js ---
+marked.use({
+    renderer: {
+        code(code, language) {
+            const validLang = language && hljs.getLanguage(language) ? language : 'plaintext';
+            const highlighted = validLang === 'plaintext' ? hljs.highlightAuto(code).value : hljs.highlight(code, { language: validLang }).value;
+            
+            return `
+<div class="code-block-wrapper">
+    <div class="code-block-header">
+        <span class="code-lang">${validLang}</span>
+        <button class="copy-btn" onclick="copyCode(this)">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            Copy
+        </button>
+    </div>
+    <pre><code class="hljs language-${validLang}">${highlighted}</code></pre>
+</div>`;
+        }
+    }
+});
+
 marked.setOptions({
     breaks: true,        // Convert \n to <br>
     gfm: true,           // GitHub Flavoured Markdown (tables, code blocks, etc.)
     sanitize: false      // We trust our own backend output
 });
+
+// Global copy function
+window.copyCode = function(button) {
+    const wrapper = button.closest('.code-block-wrapper');
+    const codeEl = wrapper.querySelector('code');
+    const text = codeEl.textContent;
+    
+    navigator.clipboard.writeText(text).then(() => {
+        const originalHTML = button.innerHTML;
+        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!';
+        setTimeout(() => button.innerHTML = originalHTML, 2000);
+    });
+};
 
 const chatMessages = document.getElementById('chatMessages');
 const userInput = document.getElementById('userInput');
@@ -138,12 +172,31 @@ function renderUserMessage(text, container) {
         const lang = detectCodeAndLanguage(block);
         
         if (lang) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'code-block-wrapper';
+            
+            const header = document.createElement('div');
+            header.className = 'code-block-header';
+            header.innerHTML = `
+                <span class="code-lang">${lang}</span>
+                <button class="copy-btn" onclick="copyCode(this)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    Copy
+                </button>
+            `;
+
             const pre = document.createElement('pre');
             const code = document.createElement('code');
-            code.className = `language-${lang}`;
+            code.className = `hljs language-${lang}`;
             code.textContent = block; // Safely insert as text (prevents XSS)
+            
+            // Apply Highlight.js to the user's code block
+            hljs.highlightElement(code);
+            
             pre.appendChild(code);
-            container.appendChild(pre);
+            wrapper.appendChild(header);
+            wrapper.appendChild(pre);
+            container.appendChild(wrapper);
         } else {
             const div = document.createElement('div');
             div.textContent = block; // Safely insert as text
