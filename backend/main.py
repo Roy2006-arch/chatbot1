@@ -187,7 +187,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     )
 
     # ── RAG ROUTING: Only use RAG if intent requires factual knowledge ────
-    INTENTS_REQUIRING_RAG = ["factual", "coding", "math", "instruction", "general", "clarification"]
+    INTENTS_REQUIRING_RAG = ["factual", "coding", "math", "instruction", "general", "clarification", "debugging", "brainstorming"]
     category = reasoning_trace.intent_category
     
     if category in INTENTS_REQUIRING_RAG:
@@ -243,8 +243,10 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         "complaint":    150,   # empathetic + fix, no essay
         "clarification":200,   # rephrase, brief
         "factual":      250,   # 2-5 lines
+        "brainstorming":250,   # concise idea list, variety over length
         "math":         300,   # step-by-step, focused
         "instruction":  400,   # ordered steps
+        "debugging":    400,   # root cause + fix + code snippet
         "coding":       512,   # full code block
         "general":      300,   # default
     }

@@ -57,8 +57,11 @@ class IntentClassifier:
 
     _PATTERNS: list[tuple[str, str]] = [
         (r"\b(hello|hi|hey|good morning|good evening|howdy|greetings|sup|yo)\b", "greeting"),
+        # debugging must come before coding so "fix"/"bug" route correctly
+        (r"\b(debug|fix the bug|traceback|stack trace|exception|why is this failing|not working as expected|diagnose|runtime error|syntax error)\b", "debugging"),
+        (r"\b(brainstorm|ideas for|come up with|suggest ideas|think of|what are some ways|alternatives|possibilities|generate ideas|creative ideas)\b", "brainstorming"),
         (r"\b(how to|steps to|guide|tutorial|explain|walk me through|steps for|procedure)\b", "instruction"),
-        (r"\b(write|code|implement|function|class|script|debug|fix the bug|error|python|javascript|java|cpp|c#|html|css)\b", "coding"),
+        (r"\b(write|code|implement|function|class|script|python|javascript|java|cpp|c#|html|css)\b", "coding"),
         (r"\b(calculate|solve|equation|math|integral|derivative|sum of|probability|maths|formula)\b", "math"),
         (r"\b(what is|who is|when did|where is|define|meaning of|tell me about|details on|info on|fact check|history of)\b", "factual"),
         (r"\b(should i|do you think|opinion|better|worse|recommend|suggest)\b", "opinion"),
@@ -124,9 +127,20 @@ class ProblemDecomposer:
             "Diagnose what went wrong without being defensive.",
             "Propose a clear corrective action or alternative.",
         ],
+        "debugging": [
+            "Identify the root cause of the error or unexpected behavior.",
+            "Explain why it happens in plain terms.",
+            "Provide a concrete fix with corrected code if applicable.",
+            "Mention how to avoid the issue in the future.",
+        ],
+        "brainstorming": [
+            "Generate a range of distinct, creative ideas relevant to the topic.",
+            "Keep each idea concise — a sentence or two max.",
+            "Prioritize variety and usefulness over quantity.",
+        ],
         "greeting": [
-            "Respond naturally and personably.",
-            "Offer help with any specific tasks or questions.",
+            "Respond naturally and personably in one short sentence.",
+            "Do NOT offer a numbered list of options or ask how to assist in a robotic way.",
         ],
         "general": [
             "Understand the core of the user's request.",
@@ -251,6 +265,17 @@ class ResponseRewriter:
         (r'^(Okay\.?\s)', "Sure — "),
     ]
 
+    # Rule 4: Robotic phrases explicitly banned by the behavioral prompt
+    _ROBOTIC_PHRASES = [
+        (r'As an AI(?: assistant|language model)?[,.]?\s*', ''),
+        (r'I would be delighted to[,.]?\s*', ''),
+        (r'How may I assist your[^?]*\??\s*', ''),
+        (r'Certainly[,!]\s*', ''),
+        (r'Of course[,!]\s*', ''),
+        (r'Absolutely[,!]\s*', ''),
+        (r'Great question[,!]\s*', ''),
+    ]
+
     # Role-leak artefacts to strip
     _LEAK_PATTERNS = [
         r'\buser:\s*', r'\bassistant:\s*', r'\bsystem:\s*',
@@ -262,6 +287,10 @@ class ResponseRewriter:
             return self._basic_cleanup(response)
 
         result = response.strip()
+
+        # --- Rule 4: Strip robotic phrases (always applied) ---
+        for pattern, replacement in self._ROBOTIC_PHRASES:
+            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
 
         # --- Strip role leakage ---
         for pattern in self._LEAK_PATTERNS:
@@ -291,6 +320,9 @@ class ResponseRewriter:
 
     def _basic_cleanup(self, response: str) -> str:
         result = response.strip()
+        # Rule 4: Always strip robotic phrases even in passing responses
+        for pattern, replacement in self._ROBOTIC_PHRASES:
+            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
         result = re.sub(r'\n{3,}', '\n\n', result)
         result = re.sub(r' {2,}', ' ', result)
         if result and not result[0].isupper():
