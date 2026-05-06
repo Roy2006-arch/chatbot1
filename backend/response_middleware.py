@@ -22,7 +22,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp
 
-from reasoning_pipeline import ReasoningPipeline
+from backend.reasoning_pipeline import ReasoningPipeline
 
 AUDIT_LOG_PATH = Path(__file__).parent.parent / "evaluation" / "logs" / "reasoning_audit.jsonl"
 AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)

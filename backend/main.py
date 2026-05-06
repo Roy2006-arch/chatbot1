@@ -12,10 +12,10 @@ import logging
 import time
 import uuid
 from fastapi import UploadFile, File
-from document_processor import DocumentProcessor
-from reasoning_pipeline import ReasoningPipeline
-from response_state_manager import ResponseStateManager, ResponseState
-from rag import KnowledgeBase, DocumentIngestionPipeline, RAGRetriever
+from backend.document_processor import DocumentProcessor
+from backend.reasoning_pipeline import ReasoningPipeline
+from backend.response_state_manager import ResponseStateManager, ResponseState
+from backend.rag import KnowledgeBase, DocumentIngestionPipeline, RAGRetriever
 
 # ── Feedback Loop System ──────────────────────────────────────────────────────
 import sys, os
@@ -77,7 +77,7 @@ model = AutoModelForCausalLM.from_pretrained(
 print(f"Model '{MODEL_NAME}' loaded successfully!")
 
 # --- 2. CONTEXT MEMORY ---
-from context_manager import ContextManager
+from backend.context_manager import ContextManager
 memory_manager = ContextManager(
     window_size=10,        # Slightly larger window
     summarize_after=16,
@@ -104,7 +104,7 @@ retriever      = RAGRetriever(
 reasoning_pipeline = ReasoningPipeline(refinement_threshold=0.55)
 state_manager = ResponseStateManager()
 
-from response_middleware import ReasoningAuditMiddleware
+from backend.response_middleware import ReasoningAuditMiddleware
 app.add_middleware(ReasoningAuditMiddleware, pipeline=reasoning_pipeline)
 
 class ChatRequest(BaseModel):
