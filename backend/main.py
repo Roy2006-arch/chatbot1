@@ -14,6 +14,7 @@ import uuid
 from fastapi import UploadFile, File
 from document_processor import DocumentProcessor
 from reasoning_pipeline import ReasoningPipeline
+from response_state_manager import ResponseStateManager, ResponseState
 from rag import KnowledgeBase, DocumentIngestionPipeline, RAGRetriever
 
 # ── Feedback Loop System ──────────────────────────────────────────────────────
@@ -101,6 +102,7 @@ retriever      = RAGRetriever(
 
 # --- Reasoning & Refinement Middleware ---
 reasoning_pipeline = ReasoningPipeline(refinement_threshold=0.55)
+state_manager = ResponseStateManager()
 
 from response_middleware import ReasoningAuditMiddleware
 app.add_middleware(ReasoningAuditMiddleware, pipeline=reasoning_pipeline)
@@ -188,14 +190,21 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         augmented_messages, reasoning_trace = await asyncio.to_thread(
             reasoning_pipeline.prepare_messages, request.message, messages
         )
+        
+        if getattr(reasoning_trace, 'is_coding_challenge', False) or reasoning_trace.intent_category == "coding":
+            state_manager.set_state(request.session_id, ResponseState.CODING_SOLVER)
+        else:
+            state_manager.set_state(request.session_id, ResponseState.NORMAL_CHAT)
     else:
         # Continuation flow: skip logging user turn, just get context
         messages = await asyncio.to_thread(
             memory_manager.get_messages, request.session_id, current_query=""
         )
+        recovery_prompt = state_manager.get_recovery_prompt(request.session_id)
+        content_msg = recovery_prompt if recovery_prompt else "Please continue exactly where you left off. Output ONLY the continued text, no conversational intro."
         augmented_messages = messages + [{
             "role": "user", 
-            "content": "Please continue exactly where you left off. Output ONLY the continued text, no conversational intro."
+            "content": content_msg
         }]
         class FakeTrace:
             intent_category = "coding"  # Give a high token budget
@@ -279,6 +288,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         for new_text in streamer:
             if await http_request.is_disconnected():
                 logger.warning("Client disconnected — stopping stream.")
+                state_manager.flag_interrupted(request.session_id)
                 break
 
             # Record time-to-first-token
@@ -295,6 +305,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                 break
 
             draft_text += new_text
+            state_manager.update_generation(request.session_id, new_text)
             yield f"data: {json.dumps({'content': new_text, 'conv_id': conv_id})}\n\n"
             await asyncio.sleep(0.01)
 
@@ -350,7 +361,15 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             total_time_seconds=total_elapsed,
         )
 
-        yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
+        is_complete = state_manager.update_generation(request.session_id, "")
+        if not is_complete:
+            state_manager.flag_interrupted(request.session_id)
+            logger.warning("Generation incomplete. Triggering automatic continuation.")
+            yield f"data: {json.dumps({'incomplete': True, 'conv_id': conv_id})}\n\n"
+        else:
+            state_manager.finalize_response(request.session_id)
+            yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
+
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

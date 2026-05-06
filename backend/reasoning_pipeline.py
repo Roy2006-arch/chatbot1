@@ -124,10 +124,11 @@ class ProblemDecomposer:
             "Provide a clear, direct answer with supporting context.",
         ],
         "coding:direct_solution": [
-            "Identify this as a coding challenge.",
-            "Plan the optimal algorithm addressing the constraints.",
-            "Write the final working code immediately.",
-            "Minimize unnecessary theory; prioritize outputting the complete correct code."
+            "Identify this as a coding challenge and lock into CODE SOLVER MODE.",
+            "Provide a short logic summary (maximum 3 lines).",
+            "Write the complete, final working code.",
+            "Optionally provide a complexity analysis.",
+            "Strictly follow the structure: Logic Summary -> Complete Code -> Complexity Analysis."
         ],
         "coding:debugging": [
             "Identify the root cause of the error or unexpected behavior.",
@@ -303,10 +304,18 @@ class ResponseValidator:
             issues.append("No sentence-ending punctuation found.")
             score -= 0.10
 
-        # For coding intent: penalise if no code block found
-        if intent_category == "coding" and "```" not in response:
-            issues.append("Coding response missing code block (```).")
-            score -= 0.15
+        # For coding intent: penalise if no code block found or if incomplete
+        if "coding" in intent_category or intent_category == "coding":
+            if "```" not in response:
+                issues.append("Coding response missing code block (```).")
+                score -= 0.15
+            else:
+                if response.count("```") % 2 != 0:
+                    issues.append("Markdown code block is not properly closed.")
+                    score -= 0.40
+                if response.count("{") != response.count("}"):
+                    issues.append("Unclosed braces detected in code.")
+                    score -= 0.30
 
         score = round(max(0.0, min(1.0, score)), 4)
         return ValidationResult(passed=score >= 0.55, issues=issues, score=score)
@@ -343,6 +352,8 @@ class ResponseRewriter:
         (r'Of course[,!]\s*', ''),
         (r'Absolutely[,!]\s*', ''),
         (r'Great question[,!]\s*', ''),
+        (r'(?i)Here is the code:?\s*', ''),
+        (r'(?i)Let\'s understand .*? first\s*', ''),
     ]
 
     # Role-leak artefacts to strip
@@ -448,7 +459,7 @@ class ReasoningPipeline:
                 trace.coding_sub_intent = coding_intent.sub_intent
                 trace.is_coding_challenge = coding_intent.is_coding_challenge
                 if coding_intent.is_coding_challenge:
-                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Prioritize final working code and minimize theory."
+                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Lock into CODE SOLVER MODE. strictly follow: Logic Summary -> Complete Code -> Complexity Analysis."
                 else:
                     trace.intent = f"User is making a coding request ({coding_intent.sub_intent})."
 
@@ -486,7 +497,7 @@ class ReasoningPipeline:
                 trace.coding_sub_intent = coding_intent.sub_intent
                 trace.is_coding_challenge = coding_intent.is_coding_challenge
                 if coding_intent.is_coding_challenge:
-                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Prioritize final working code and minimize theory."
+                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Lock into CODE SOLVER MODE. strictly follow: Logic Summary -> Complete Code -> Complexity Analysis."
                 else:
                     trace.intent = f"User is making a coding request ({coding_intent.sub_intent})."
 
