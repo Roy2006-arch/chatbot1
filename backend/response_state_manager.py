@@ -13,6 +13,7 @@ Features:
 """
 
 import logging
+import re
 from enum import Enum, auto
 from dataclasses import dataclass
 from typing import Dict, Optional
@@ -34,7 +35,46 @@ class GenerationContext:
     is_interrupted: bool = False
     incomplete_code_block: bool = False
     unclosed_braces: int = 0
+    detected_language: str = ""
     last_complete_line: str = ""
+
+
+class CompetitiveProgrammingValidator:
+    """
+    Advanced validation for competitive programming code blocks.
+    Tracks markdown state, bracket matching, and language-specific syntax rules.
+    """
+    @staticmethod
+    def validate(buffer: str) -> dict:
+        # 1. Markdown validation & Language Detection
+        code_blocks = re.findall(r"```(\w*)", buffer)
+        incomplete_code_block = len(code_blocks) % 2 != 0
+        
+        detected_language = ""
+        if code_blocks and incomplete_code_block:
+            detected_language = code_blocks[-1].lower()
+
+        # 2. Bracket Matching
+        open_braces = buffer.count("{")
+        close_braces = buffer.count("}")
+        unclosed_braces = max(0, open_braces - close_braces)
+
+        # 3. Python Specific Check (Indentation/Block check)
+        is_python_incomplete = False
+        if detected_language == "python" or detected_language == "py":
+            lines = buffer.split("\n")
+            if lines:
+                last_line = lines[-1].rstrip()
+                # If the last line ends with a colon, we are definitely expecting an indented block
+                if last_line.endswith(":"):
+                    is_python_incomplete = True
+
+        return {
+            "incomplete_code_block": incomplete_code_block,
+            "detected_language": detected_language,
+            "unclosed_braces": unclosed_braces,
+            "is_python_incomplete": is_python_incomplete
+        }
 
 
 class ResponseStateManager:
@@ -81,14 +121,12 @@ class ResponseStateManager:
         ctx = self._get_context(session_id)
         ctx.buffer += chunk
         
-        # Markdown closure validation
-        code_block_count = ctx.buffer.count("```")
-        ctx.incomplete_code_block = (code_block_count % 2 != 0)
-        
-        # Brace closure validation (simple heuristic)
-        open_braces = ctx.buffer.count("{")
-        close_braces = ctx.buffer.count("}")
-        ctx.unclosed_braces = max(0, open_braces - close_braces)
+        # Validate using the CP Validator
+        validation = CompetitiveProgrammingValidator.validate(ctx.buffer)
+        ctx.incomplete_code_block = validation["incomplete_code_block"]
+        ctx.unclosed_braces = validation["unclosed_braces"]
+        ctx.detected_language = validation["detected_language"]
+        is_python_incomplete = validation["is_python_incomplete"]
 
         # Track the last full line for precise interruption recovery
         lines = ctx.buffer.split("\n")
@@ -96,7 +134,8 @@ class ResponseStateManager:
             # -2 because the last element is the currently forming line after the final \n
             ctx.last_complete_line = lines[-2].strip()
 
-        is_complete = not ctx.incomplete_code_block and ctx.unclosed_braces == 0
+        # Is the code functionally complete?
+        is_complete = not ctx.incomplete_code_block and ctx.unclosed_braces == 0 and not is_python_incomplete
         return is_complete
 
     def flag_interrupted(self, session_id: str):
@@ -129,8 +168,11 @@ class ResponseStateManager:
             if ctx.incomplete_code_block:
                 prompt_parts.append("Ensure the markdown code block (```) is properly closed.")
                 
-            if ctx.unclosed_braces > 0:
+            if ctx.unclosed_braces > 0 and ctx.detected_language not in ["python", "py"]:
                 prompt_parts.append(f"Ensure {ctx.unclosed_braces} pending open braces ({{) are closed.")
+                
+            if ctx.detected_language in ["python", "py"]:
+                prompt_parts.append("Maintain proper Python indentation for the incomplete block.")
                 
             prompt_parts.append("Complete the final code immediately.")
         else:

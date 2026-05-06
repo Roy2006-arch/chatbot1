@@ -125,10 +125,11 @@ class ProblemDecomposer:
         ],
         "coding:direct_solution": [
             "Identify this as a coding challenge and lock into CODE SOLVER MODE.",
-            "Provide a short logic summary (maximum 3 lines).",
+            "Provide a short approach explanation (2–4 lines maximum).",
             "Write the complete, final working code.",
-            "Optionally provide a complexity analysis.",
-            "Strictly follow the structure: Logic Summary -> Complete Code -> Complexity Analysis."
+            "Provide Time Complexity.",
+            "Provide Space Complexity.",
+            "Strictly follow the MANDATORY RESPONSE FORMAT structure: Approach -> Code -> Time Complexity -> Space Complexity."
         ],
         "coding:debugging": [
             "Identify the root cause of the error or unexpected behavior.",
@@ -459,7 +460,7 @@ class ReasoningPipeline:
                 trace.coding_sub_intent = coding_intent.sub_intent
                 trace.is_coding_challenge = coding_intent.is_coding_challenge
                 if coding_intent.is_coding_challenge:
-                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Lock into CODE SOLVER MODE. strictly follow: Logic Summary -> Complete Code -> Complexity Analysis."
+                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Lock into CODE SOLVER MODE. strictly follow MANDATORY RESPONSE FORMAT: Approach -> Code -> Time Complexity -> Space Complexity."
                 else:
                     trace.intent = f"User is making a coding request ({coding_intent.sub_intent})."
 
@@ -497,7 +498,7 @@ class ReasoningPipeline:
                 trace.coding_sub_intent = coding_intent.sub_intent
                 trace.is_coding_challenge = coding_intent.is_coding_challenge
                 if coding_intent.is_coding_challenge:
-                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Lock into CODE SOLVER MODE. strictly follow: Logic Summary -> Complete Code -> Complexity Analysis."
+                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Lock into CODE SOLVER MODE. strictly follow MANDATORY RESPONSE FORMAT: Approach -> Code -> Time Complexity -> Space Complexity."
                 else:
                     trace.intent = f"User is making a coding request ({coding_intent.sub_intent})."
 

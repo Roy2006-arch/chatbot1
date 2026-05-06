@@ -46,11 +46,13 @@ import os
 from pathlib import Path
 
 _PROMPT_PATH = Path(__file__).parent / "system_prompt.txt"
-try:
-    with open(_PROMPT_PATH, "r", encoding="utf-8") as _f:
-        SYSTEM_IDENTITY = _f.read()
-except FileNotFoundError:
-    SYSTEM_IDENTITY = "You are a helpful AI assistant."
+
+def get_system_identity() -> str:
+    try:
+        with open(_PROMPT_PATH, "r", encoding="utf-8") as _f:
+            return _f.read()
+    except FileNotFoundError:
+        return "You are a helpful AI assistant."
 
 # How many characters count as approximately 1 token (rough heuristic for GPT-family)
 CHARS_PER_TOKEN: int = 4
@@ -169,7 +171,7 @@ class ContextManager:
         This follows the standard {"role": "...", "content": "..."} format.
         """
         if session_id not in self._sessions:
-            return [{"role": "system", "content": SYSTEM_IDENTITY}]
+            return [{"role": "system", "content": get_system_identity()}]
 
         state = self._sessions[session_id]
         state.last_accessed = time.time()
@@ -177,7 +179,7 @@ class ContextManager:
         messages: List[Dict[str, str]] = []
 
         # 1. System Prompt (Identity + Key Info + Episodic Context)
-        system_content = [SYSTEM_IDENTITY]
+        system_content = [get_system_identity()]
 
         # 1.2 Key info
         if include_key_info and state.key_info:
