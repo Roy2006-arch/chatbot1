@@ -71,11 +71,37 @@ class IntentClassifier:
 
     def classify(self, message: str) -> tuple[str, str]:
         """Return (intent_summary, category_label)."""
+        
+        # 1. Advanced Code Detection: Check for markdown code blocks or regex signatures
+        has_code = False
+        if "```" in message:
+            has_code = True
+        else:
+            # Look for common language signatures (Python, JS, Java, C++, SQL, etc.)
+            code_signatures = [
+                r"\bdef \w+\(", r"\bclass \w+:", r"\bimport \w+",    # Python
+                r"\bfunction\s*\(?", r"\bconst \w+\s*=", r"=>",       # JavaScript
+                r"\bpublic static void", r"\bSystem\.out",            # Java
+                r"#include\s*<", r"\bstd::",                          # C++
+                r"SELECT .* FROM", r"UPDATE .* SET"                   # SQL
+            ]
+            has_code = any(re.search(p, message) for p in code_signatures)
+
+        # 2. Standard Intent Matching
         msg_lower = message.lower()
         for pattern, category in self._PATTERNS:
             if re.search(pattern, msg_lower):
+                # If code is present but intent doesn't match coding/debugging inherently, upgrade it
+                if has_code and category not in ["coding", "debugging"]:
+                    return "User is asking a question or requesting a fix for the provided code.", "debugging"
+                    
                 intent_summary = f"User is making a {category} request."
                 return intent_summary, category
+                
+        # 3. Fallbacks
+        if has_code:
+            return "User provided a raw code snippet. They likely want it reviewed or explained.", "coding"
+
         return "User is making a general request.", "general"
 
 

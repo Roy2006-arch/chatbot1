@@ -85,13 +85,91 @@ function showTypingIndicator(contentDiv) {
     `;
 }
 
+// --- Code Detection Logic ---
+function detectCodeAndLanguage(text) {
+    const lines = text.split('\n');
+    
+    // Fast fail for short text
+    if (lines.length === 1 && text.length < 20) return null;
+
+    const patterns = {
+        javascript: /^(const|let|var|function|import|export|console\.log)\b/m,
+        python: /^(def|class|import|from|print|if __name__|elif|yield)\b/m,
+        java: /^(public|private|protected|class|interface|static|void|System\.out)\b/m,
+        cpp: /^(#include|using namespace|int main|std::|cout)\b/m,
+        html: /<\/?(html|body|div|span|p|a|script|style)[^>]*>/m,
+        css: /([.#\w][^{]+)\{([^}]+)\}/m,
+        sql: /^(SELECT|UPDATE|DELETE|INSERT|CREATE|DROP|ALTER)\b/i
+    };
+
+    // Calculate structural indicators
+    const indentedLines = lines.filter(line => /^( {2,}|\t)/.test(line));
+    const indentationRatio = lines.length > 0 ? indentedLines.length / lines.length : 0;
+    
+    const symbols = text.match(/[{}[\]();=+\-*/&|!<>]/g);
+    const symbolDensity = symbols ? symbols.length / text.length : 0;
+
+    // Check regex matches
+    for (const [lang, regex] of Object.entries(patterns)) {
+        if (regex.test(text)) return lang;
+    }
+
+    // Heuristic fallbacks
+    if (indentationRatio > 0.4 || symbolDensity > 0.1) return 'code';
+    
+    return null;
+}
+
+function renderUserMessage(text, container) {
+    container.innerHTML = '';
+    
+    // 1. Check if user manually provided markdown code blocks
+    if (text.includes('```')) {
+        const p = document.createElement('div');
+        p.textContent = text; // Safe text rendering
+        container.appendChild(p);
+        return;
+    }
+
+    // 2. Auto-detect code blocks based on empty lines (double newline)
+    const blocks = text.split(/\n{2,}/);
+    
+    blocks.forEach(block => {
+        const lang = detectCodeAndLanguage(block);
+        
+        if (lang) {
+            const pre = document.createElement('pre');
+            const code = document.createElement('code');
+            code.className = `language-${lang}`;
+            code.textContent = block; // Safely insert as text (prevents XSS)
+            pre.appendChild(code);
+            container.appendChild(pre);
+        } else {
+            const div = document.createElement('div');
+            div.textContent = block; // Safely insert as text
+            container.appendChild(div);
+            
+            // Add spacing between blocks
+            const br = document.createElement('br');
+            container.appendChild(br);
+            const br2 = document.createElement('br');
+            container.appendChild(br2);
+        }
+    });
+    
+    // Remove trailing breaks
+    while (container.lastChild && container.lastChild.tagName === 'BR') {
+        container.removeChild(container.lastChild);
+    }
+}
+
 async function sendMessage() {
     const text = userInput.value;
     if (text.trim() === '') return;
     
     // Add user message
     const { messageDiv: userDiv, contentDiv: userContent } = createMessageElement('user');
-    userContent.textContent = text;
+    renderUserMessage(text, userContent);
     chatMessages.appendChild(userDiv);
     
     // Reset input

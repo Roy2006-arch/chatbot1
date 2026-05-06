@@ -156,6 +156,26 @@ body {
     white-space: pre-wrap;
 }
 
+/* Code Block Formatting */
+pre {
+    background-color: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--nav-border);
+    border-radius: 8px;
+    padding: 12px;
+    overflow-x: auto;
+    margin: 8px 0;
+}
+
+code {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.9em;
+}
+
+.user-message pre {
+    background-color: rgba(0, 0, 0, 0.1);
+    border-color: rgba(0, 0, 0, 0.1);
+}
+
 /* Typing Animation */
 .typing-indicator {
     display: flex;
