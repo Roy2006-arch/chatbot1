@@ -38,6 +38,8 @@ class ReasoningTrace:
     """Holds every internal step for debugging/logging (never sent to user)."""
     intent:          str = ""
     intent_category: str = "general"
+    coding_sub_intent: str = ""
+    is_coding_challenge: bool = False
     steps:           list[str] = field(default_factory=list)
     draft_issues:    list[str] = field(default_factory=list)
     refinement_applied: bool = False
@@ -121,6 +123,39 @@ class ProblemDecomposer:
             "Cross-check for potential ambiguity in the question.",
             "Provide a clear, direct answer with supporting context.",
         ],
+        "coding:direct_solution": [
+            "Identify this as a coding challenge.",
+            "Plan the optimal algorithm addressing the constraints.",
+            "Write the final working code immediately.",
+            "Minimize unnecessary theory; prioritize outputting the complete correct code."
+        ],
+        "coding:debugging": [
+            "Identify the root cause of the error or unexpected behavior.",
+            "Explain why it happens in plain terms.",
+            "Provide a concrete fix with corrected code if applicable.",
+            "Mention how to avoid the issue in the future."
+        ],
+        "coding:explanation": [
+            "Break down the provided code step by step.",
+            "Explain what each part does and how it contributes to the overall logic.",
+            "Avoid rewriting the code unless a simplification helps understanding."
+        ],
+        "coding:optimization": [
+            "Analyze the current time and space complexity.",
+            "Identify bottlenecks in the code.",
+            "Provide an optimized version with improved complexity.",
+            "Explain the improvements clearly."
+        ],
+        "coding:conversion": [
+            "Identify the source language and the target language.",
+            "Translate the logic idiomatically to the target language.",
+            "Note any language-specific differences or caveats."
+        ],
+        "coding:algorithm": [
+            "Explain the theoretical concept behind the algorithm.",
+            "Walk through an example of how it works.",
+            "Discuss its typical use cases and complexities."
+        ],
         "coding": [
             "Understand the programming task and language constraints.",
             "Plan the solution approach (algorithm / data structure).",
@@ -175,7 +210,14 @@ class ProblemDecomposer:
         ],
     }
 
-    def decompose(self, category: str) -> list[str]:
+    def decompose(self, category: str, sub_intent: str = "", is_challenge: bool = False) -> list[str]:
+        if category in ["coding", "debugging"]:
+            if is_challenge:
+                return self._TEMPLATES.get("coding:direct_solution", self._TEMPLATES["coding"])
+            if sub_intent:
+                key = f"coding:{sub_intent}"
+                if key in self._TEMPLATES:
+                    return self._TEMPLATES[key]
         return self._TEMPLATES.get(category, self._TEMPLATES["general"])
 
 
@@ -398,10 +440,22 @@ class ReasoningPipeline:
         trace.intent          = intent_summary
         trace.intent_category = category
 
-        steps = self.decomposer.decompose(category)
+        if category in ["coding", "debugging"]:
+            from coding_intent import CodingIntentClassifier
+            coding_classifier = CodingIntentClassifier()
+            coding_intent = coding_classifier.classify(user_message)
+            if coding_intent.is_coding:
+                trace.coding_sub_intent = coding_intent.sub_intent
+                trace.is_coding_challenge = coding_intent.is_coding_challenge
+                if coding_intent.is_coding_challenge:
+                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Prioritize final working code and minimize theory."
+                else:
+                    trace.intent = f"User is making a coding request ({coding_intent.sub_intent})."
+
+        steps = self.decomposer.decompose(category, trace.coding_sub_intent, trace.is_coding_challenge)
         trace.steps = steps
 
-        augmented = self.augmenter.augment_messages(messages, intent_summary, steps)
+        augmented = self.augmenter.augment_messages(messages, trace.intent, steps)
 
         trace.latency_ms = round((time.perf_counter() - t0) * 1000, 2)
         self._last_trace = trace
@@ -424,7 +478,19 @@ class ReasoningPipeline:
         trace.intent          = intent_summary
         trace.intent_category = category
 
-        steps = self.decomposer.decompose(category)
+        if category in ["coding", "debugging"]:
+            from coding_intent import CodingIntentClassifier
+            coding_classifier = CodingIntentClassifier()
+            coding_intent = coding_classifier.classify(user_message)
+            if coding_intent.is_coding:
+                trace.coding_sub_intent = coding_intent.sub_intent
+                trace.is_coding_challenge = coding_intent.is_coding_challenge
+                if coding_intent.is_coding_challenge:
+                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Prioritize final working code and minimize theory."
+                else:
+                    trace.intent = f"User is making a coding request ({coding_intent.sub_intent})."
+
+        steps = self.decomposer.decompose(category, trace.coding_sub_intent, trace.is_coding_challenge)
         trace.steps = steps
 
         # Use dummy string logic for legacy
