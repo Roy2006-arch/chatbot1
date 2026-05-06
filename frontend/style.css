@@ -152,6 +152,10 @@ body {
     word-wrap: break-word;
 }
 
+.user-message .message-content {
+    white-space: pre-wrap;
+}
+
 /* Typing Animation */
 .typing-indicator {
     display: flex;

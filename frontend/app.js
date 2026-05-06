@@ -86,8 +86,8 @@ function showTypingIndicator(contentDiv) {
 }
 
 async function sendMessage() {
-    const text = userInput.value.trim();
-    if (!text) return;
+    const text = userInput.value;
+    if (text.trim() === '') return;
     
     // Add user message
     const { messageDiv: userDiv, contentDiv: userContent } = createMessageElement('user');
@@ -190,13 +190,21 @@ async function sendMessage() {
 
 sendButton.addEventListener('click', sendMessage);
 
-// Handle Enter to send, Shift+Enter for new line
+// Handle Enter to send, Shift+Enter for new line, Tab for indentation
 userInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault(); // Prevent default new line
         if (!sendButton.disabled) {
             sendMessage();
         }
+    } else if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = e.target.selectionStart;
+        const end = e.target.selectionEnd;
+        e.target.value = e.target.value.substring(0, start) + "\t" + e.target.value.substring(end);
+        e.target.selectionStart = e.target.selectionEnd = start + 1;
+        // Trigger input event to update button state and textarea height
+        e.target.dispatchEvent(new Event('input'));
     }
 });
 
