@@ -236,12 +236,26 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 
     streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
+    # ── Rule 3: Intelligent length control by intent ─────────────────────────
+    MAX_TOKENS_BY_INTENT = {
+        "greeting":      40,   # 1 short sentence
+        "opinion":      150,   # concise recommendation
+        "complaint":    150,   # empathetic + fix, no essay
+        "clarification":200,   # rephrase, brief
+        "factual":      250,   # 2-5 lines
+        "math":         300,   # step-by-step, focused
+        "instruction":  400,   # ordered steps
+        "coding":       512,   # full code block
+        "general":      300,   # default
+    }
+    max_new_tokens = MAX_TOKENS_BY_INTENT.get(category, 300)
+
     generation_kwargs = dict(
         **inputs,
         streamer=streamer,
-        max_new_tokens=512,  # Increased further
-        temperature=0.6,     # Slightly increased for more natural flow
-        repetition_penalty=1.1, # Slightly lowered to avoid weird word choices
+        max_new_tokens=max_new_tokens,
+        temperature=0.6,
+        repetition_penalty=1.1,
         do_sample=True,
         top_p=0.9,
         pad_token_id=tokenizer.eos_token_id
