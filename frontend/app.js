@@ -240,62 +240,164 @@ async function sendMessage() {
     chatMessages.scrollTo({ top: chatMessages.scrollHeight, behavior: 'smooth' });
     
     try {
-        const response = await fetch(`${BACKEND_URL}/chat/stream`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text, session_id: sessionId })
-        });
+        let fullResponse = '';
+        let tokenCount = 0;
+        let isComplete = false;
+        let continuationCount = 0;
+        const MAX_CONTINUATIONS = 3;
         
-        // Remove typing indicator once stream starts
+        // Helper to safely render streaming markdown
+        const renderMarkdownStream = (text, isDone) => {
+            let renderText = text;
+            
+            // Robustly fix unclosed code blocks
+            const codeBlockMatches = text.match(/(?:^|\n)```/g) || [];
+            if (codeBlockMatches.length % 2 !== 0) {
+                renderText += '\n```\n';
+            }
+            
+            renderText += (isDone ? '' : ' ▌');
+            return marked.parse(renderText);
+        };
+
+        // Token queue for smooth typing
+        let tokenQueue = [];
+        let renderLoopActive = true;
+
+        const processQueue = () => {
+            if (!renderLoopActive) return;
+
+            if (tokenQueue.length > 0) {
+                // Smooth typing: pop a subset of tokens depending on queue size
+                let tokensToPop = 1;
+                if (tokenQueue.length > 100) tokensToPop = Math.ceil(tokenQueue.length / 5);
+                else if (tokenQueue.length > 20) tokensToPop = 5;
+                else if (tokenQueue.length > 5) tokensToPop = 2;
+                
+                let chunk = tokenQueue.splice(0, tokensToPop).join('');
+                fullResponse += chunk;
+                
+                aiContent.innerHTML = renderMarkdownStream(fullResponse, false);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+            
+            requestAnimationFrame(processQueue);
+        };
+        // Start the debounced render loop
+        requestAnimationFrame(processQueue);
+
+        // Remove typing indicator once loop starts
         aiContent.innerHTML = '';
+        
+        let isContinuation = false;
+        let streamDone = false;
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let done = false;
-        let sseBuffer = '';      // Buffer for incomplete SSE lines
-        let fullResponse = '';   // Accumulate full text for final Markdown render
-        let tokenCount = 0;      // Track approximate token count for truncation detection
+        while (!streamDone && continuationCount < MAX_CONTINUATIONS) {
+            try {
+                const response = await fetch(`${BACKEND_URL}/chat/stream`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text, session_id: sessionId, is_continuation: isContinuation })
+                });
+            
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let chunkDone = false;
+                let sseBuffer = '';
 
-        while (!done) {
-            const { value, done: readerDone } = await reader.read();
-            done = readerDone;
-            if (value) {
-                sseBuffer += decoder.decode(value, { stream: !done });
-                const lines = sseBuffer.split('\n');
-
-                // Keep the last incomplete line in the buffer
-                sseBuffer = lines.pop();
-
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const dataStr = line.replace('data: ', '').trim();
-                        if (dataStr === '[DONE]') {
-                            done = true;
-                            break;
-                        }
-                        try {
-                            const parsed = JSON.parse(dataStr);
-                            if (parsed.content) {
-                                fullResponse += parsed.content;
-                                tokenCount++;
+                while (!chunkDone) {
+                    let value, readerDone;
+                    try {
+                        const result = await reader.read();
+                        value = result.value;
+                        readerDone = result.done;
+                    } catch (error) {
+                        console.warn("Stream read error, attempting to recover...", error);
+                        break; // Break loop on network error to recover
+                    }
+                    
+                    chunkDone = readerDone;
+                    
+                    if (value) {
+                        sseBuffer += decoder.decode(value, { stream: true });
+                        
+                        // Proper SSE event splitting by double newline
+                        const events = sseBuffer.split('\n\n');
+                        
+                        // Keep the last incomplete event in the buffer
+                        sseBuffer = events.pop();
+                        
+                        for (let i = 0; i < events.length; i++) {
+                            const event = events[i];
+                            if (event.trim() === '') continue;
+                            
+                            const lines = event.split('\n');
+                            let dataStr = '';
+                            
+                            for (const line of lines) {
+                                if (line.startsWith('data: ')) {
+                                    dataStr += line.substring(6).trim();
+                                }
                             }
                             
-                            // If the backend sends a refined (final corrected) version, use that instead
-                            if (parsed.refined && parsed.full) {
-                                fullResponse = parsed.full;
+                            if (dataStr === '[DONE]') {
+                                streamDone = true;
+                                chunkDone = true;
+                                break;
                             }
-
-                            // Re-render the full accumulated Markdown on every token
-                            // This gives a live-streaming Markdown effect
-                            aiContent.innerHTML = marked.parse(fullResponse);
-                            chatMessages.scrollTop = chatMessages.scrollHeight;
-                        } catch (e) {
-                            console.error("Parse error:", e, "on string:", dataStr);
+                            
+                            if (dataStr) {
+                                try {
+                                    const parsed = JSON.parse(dataStr);
+                                    if (parsed.content) {
+                                        tokenQueue.push(parsed.content);
+                                        tokenCount++;
+                                    }
+                                    
+                                    // If the backend sends a refined (final corrected) version, use that instead
+                                    if (parsed.refined && parsed.full) {
+                                        fullResponse = parsed.full;
+                                        tokenQueue = []; // Clear queue since we have the full replaced text
+                                        aiContent.innerHTML = renderMarkdownStream(fullResponse, false);
+                                    }
+                                } catch (e) {
+                                    console.warn("Parse error on chunk, buffering for retry...", e);
+                                    // Retry failed chunks automatically by putting remaining events back in buffer
+                                    const remaining = events.slice(i).join('\n\n');
+                                    sseBuffer = remaining + (sseBuffer ? '\n\n' + sseBuffer : '');
+                                    break; // Wait for next stream chunk to complete the JSON
+                                }
+                            }
                         }
                     }
                 }
+                
+                if (!streamDone) {
+                    console.warn("Stream ended unexpectedly, triggering continuation...");
+                    isContinuation = true;
+                    continuationCount++;
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+            } catch (error) {
+                console.warn("Connection error, triggering continuation...", error);
+                isContinuation = true;
+                continuationCount++;
+                await new Promise(resolve => setTimeout(resolve, 1000));
             }
+        } // end stream inner while loop
+
+        // Flush queue
+        if (tokenQueue.length > 0) {
+            fullResponse += tokenQueue.join('');
+            tokenQueue = [];
         }
+
+        renderLoopActive = false; // stop queue processing
+
+        // Final render cleanup
+        aiContent.innerHTML = renderMarkdownStream(fullResponse, true);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
 
         // --- FIX 1: Hallucination guard fired (empty response) ---
         if (fullResponse.trim() === '') {
@@ -304,17 +406,9 @@ async function sendMessage() {
             );
         }
 
-        // --- FIX 2: Truncation detection (response likely hit max_new_tokens) ---
-        // If the response doesn't end with sentence-ending punctuation, it was cut off
-        const trimmed = fullResponse.trimEnd();
-        const endsCleanly = /[.!?`\])]$/.test(trimmed);
-        if (trimmed.length > 0 && !endsCleanly && tokenCount >= 140) {
-            aiContent.innerHTML += marked.parse(
-                '\n\n---\n*✂️ Response was cut short due to length. Ask me to **"continue"** for more.*'
-            );
-        }
-
     } catch (error) {
+        // Ensure queue process stops
+        renderLoopActive = false;
         aiContent.innerHTML = marked.parse('❌ **Error:** Could not reach the backend server. Please ensure it is running on `127.0.0.1:8000`.');
     }
 }

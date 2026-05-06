@@ -109,6 +109,7 @@ class ChatRequest(BaseModel):
     message:    str
     session_id: str
     conv_id:    str = ""   # optional; generated server-side if blank
+    is_continuation: bool = False
 
     def get_or_create_conv_id(self) -> str:
         return self.conv_id if self.conv_id else new_conv_id()
@@ -162,35 +163,50 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     turn_start = time.time()
     first_token_time: list[float] = []   # mutable container for closure capture
 
-    # Log the user turn immediately
-    await asyncio.to_thread(
-        log_turn,
-        conv_id=conv_id,
-        session_id=request.session_id,
-        turn_index=0,
-        role="user",
-        content=request.message,
-        model_name=MODEL_NAME,
-    )
+    # ── Feedback & Memory Tracking ─────────────────────────────────────────
+    if not request.is_continuation:
+        # Log the user turn immediately
+        await asyncio.to_thread(
+            log_turn,
+            conv_id=conv_id,
+            session_id=request.session_id,
+            turn_index=0,
+            role="user",
+            content=request.message,
+            model_name=MODEL_NAME,
+        )
 
-    # ── Memory: record user turn ──────────────────────────────────────────
-    await asyncio.to_thread(memory_manager.add_message, request.session_id, "user", request.message)
+        # ── Memory: record user turn ──────────────────────────────────────────
+        await asyncio.to_thread(memory_manager.add_message, request.session_id, "user", request.message)
 
-    # ── Memory: retrieve context (structured messages) ────
-    messages = await asyncio.to_thread(
-        memory_manager.get_messages, request.session_id, current_query=request.message
-    )
+        # ── Memory: retrieve context ──────────────────────────────────────────
+        messages = await asyncio.to_thread(
+            memory_manager.get_messages, request.session_id, current_query=request.message
+        )
 
-    # ── REASONING PIPELINE: Phase A — augment prompt ─────────────────────
-    augmented_messages, reasoning_trace = await asyncio.to_thread(
-        reasoning_pipeline.prepare_messages, request.message, messages
-    )
+        # ── REASONING PIPELINE: Phase A — augment prompt ─────────────────────
+        augmented_messages, reasoning_trace = await asyncio.to_thread(
+            reasoning_pipeline.prepare_messages, request.message, messages
+        )
+    else:
+        # Continuation flow: skip logging user turn, just get context
+        messages = await asyncio.to_thread(
+            memory_manager.get_messages, request.session_id, current_query=""
+        )
+        augmented_messages = messages + [{
+            "role": "user", 
+            "content": "Please continue exactly where you left off. Output ONLY the continued text, no conversational intro."
+        }]
+        class FakeTrace:
+            intent_category = "coding"  # Give a high token budget
+            steps = []
+        reasoning_trace = FakeTrace()
 
     # ── RAG ROUTING: Only use RAG if intent requires factual knowledge ────
     INTENTS_REQUIRING_RAG = ["factual", "coding", "math", "instruction", "general", "clarification", "debugging", "brainstorming"]
     category = reasoning_trace.intent_category
     
-    if category in INTENTS_REQUIRING_RAG:
+    if not request.is_continuation and category in INTENTS_REQUIRING_RAG:
         # ── RAG Tier 1: Global Knowledge Base ───────────────────────────────
         rag_result = await asyncio.to_thread(retriever.retrieve, request.message)
         
@@ -212,7 +228,8 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                 
             augmented_messages[0]["content"] = system_content
     else:
-        logger.info("[RAG] Bypassed RAG for category: %s", category)
+        if not request.is_continuation:
+            logger.info("[RAG] Bypassed RAG for category: %s", category)
     logger.info(
         "[ReasoningPipeline] session=%s intent=%s steps=%d",
         request.session_id, reasoning_trace.intent_category, len(reasoning_trace.steps)
@@ -236,21 +253,10 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 
     streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
-    # ── Rule 3: Intelligent length control by intent ─────────────────────────
-    MAX_TOKENS_BY_INTENT = {
-        "greeting":      40,   # 1 short sentence
-        "opinion":      150,   # concise recommendation
-        "complaint":    150,   # empathetic + fix, no essay
-        "clarification":200,   # rephrase, brief
-        "factual":      250,   # 2-5 lines
-        "brainstorming":250,   # concise idea list, variety over length
-        "math":         300,   # step-by-step, focused
-        "instruction":  400,   # ordered steps
-        "debugging":    400,   # root cause + fix + code snippet
-        "coding":       512,   # full code block
-        "general":      300,   # default
-    }
-    max_new_tokens = MAX_TOKENS_BY_INTENT.get(category, 300)
+    # ── Rule 3: Unrestricted length control ──────────────────────────────────
+    # Removed arbitrary intent-based token constraints to prevent the model 
+    # from artificially cutting off code blocks or long explanations.
+    max_new_tokens = 8192
 
     generation_kwargs = dict(
         **inputs,
@@ -280,9 +286,12 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                 first_token_time.append(time.time() - turn_start)
 
             temp_text = draft_text + new_text
+            
             # Halt on role-leakage hallucination or special tokens
-            stop_tokens = ["user:", "assistant:", "system:", "<|user|>", "<|assistant|>", "</s>"]
-            if any(token in temp_text.lower() for token in stop_tokens):
+            # Optimized: Only check the tail to prevent O(N^2) lag
+            stop_tokens = ["<|user|>", "<|assistant|>", "<|system|>", "</s>", "\nuser:", "\nassistant:", "\nsystem:"]
+            tail = temp_text[-50:].lower()
+            if any(token in tail for token in stop_tokens):
                 break
 
             draft_text += new_text
