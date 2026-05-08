@@ -153,14 +153,14 @@ MAX_AUTORETRY = 1
 MAX_CONTINUATION_NEW_TOKENS = 4096
 
 GREETING_RESPONSES = OrderedDict([
-    ("hello", "Hello! How can I help?"),
-    ("hi", "Hi there! How can I help?"),
-    ("hey", "Hey! What can I do for you?"),
-    ("good morning", "Good morning! How can I help?"),
-    ("good evening", "Good evening! How can I assist?"),
-    ("how are you", "I'm doing well, thanks! How can I help?"),
-    ("what's your name", "I'm a chatbot assistant here to help with your questions."),
-    ("who are you", "I'm a chatbot assistant. How can I help?"),
+    ("hello", "Hi! How may I help you?"),
+    ("hi", "Hi! How may I help you?"),
+    ("hey", "Hi! How may I help you?"),
+    ("good morning", "Good morning! How may I help you?"),
+    ("good evening", "Good evening! How may I assist you?"),
+    ("how are you", "I'm doing well! How may I help you?"),
+    ("what's your name", "I'm a chatbot assistant. How may I help you?"),
+    ("who are you", "I'm a chatbot assistant. How may I help you?"),
     ("who made you", "I was created to assist with questions and tasks."),
     ("thanks", "You're welcome! Happy to help."),
     ("thank you", "You're welcome! Happy to help."),
@@ -315,9 +315,38 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     conv_id = request.get_or_create_conv_id()
-    request_id = f"req_{uuid.uuid4().hex[:8]}"
     turn_start = time.time()
 
+    # Fast-path greeting check - run before any expensive processing
+    if not request.is_continuation:
+        greeting_response = _get_greeting_response(request.message)
+        if greeting_response:
+            logger.info("[FastPath] Greeting for session=%s", request.session_id)
+            await asyncio.to_thread(
+                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=0,
+                role="user", content=request.message, model_name=MODEL_NAME,
+            )
+            await asyncio.to_thread(
+                memory_manager.add_message, request.session_id, "user", request.message
+            )
+            await asyncio.to_thread(
+                memory_manager.add_message, request.session_id, "assistant", greeting_response
+            )
+            await asyncio.to_thread(
+                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
+                role="assistant", content=greeting_response, model_name=MODEL_NAME,
+                prompt=request.message, ttft_seconds=0.0,
+                total_time_seconds=time.time() - turn_start,
+            )
+            orchestrator.reset_session(request.session_id)
+
+            async def greeting_stream():
+                yield f"data: {json.dumps({'content': greeting_response, 'conv_id': conv_id})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(greeting_stream(), media_type="text/event-stream")
+
+    request_id = f"req_{uuid.uuid4().hex[:8]}"
     request_cache = RequestEmbeddingCache()
     set_request_cache(request_cache)
     first_token_time: list[float] = []
@@ -388,30 +417,6 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     is_simple = _is_simple_query(category, request.message)
 
     if not request.is_continuation:
-        greeting_response = _get_greeting_response(request.message)
-        if greeting_response:
-            logger.info("[FastPath] Greeting for session=%s", request.session_id)
-            await asyncio.to_thread(
-                memory_manager.add_message, request.session_id, "assistant", greeting_response
-            )
-            await asyncio.to_thread(
-                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
-                role="assistant", content=greeting_response, model_name=MODEL_NAME,
-                prompt=request.message, ttft_seconds=0.0,
-                total_time_seconds=time.time() - turn_start,
-            )
-            orchestrator.reset_session(request.session_id)
-            cache = get_request_cache()
-            if cache:
-                cache.clear()
-            set_request_cache(None)
-
-            async def greeting_stream():
-                yield f"data: {json.dumps({'content': greeting_response, 'conv_id': conv_id})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
-                yield "data: [DONE]\n\n"
-            return StreamingResponse(greeting_stream(), media_type="text/event-stream")
-
         cached_response = response_cache.get(request.message, request.session_id)
         if cached_response:
             logger.info("[FastPath] Cache hit for session=%s", request.session_id)
