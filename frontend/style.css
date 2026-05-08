@@ -1,52 +1,44 @@
 /* CSS Variables for Light/Dark Mode */
 :root {
+    /* Light Mode Palette */
     --bg-color: #ffffff;
     --nav-border: #e5e7eb;
     --text-primary: #111827;
     --text-secondary: #6b7280;
-
+    
     --ai-bg: #ffffff;
     --user-bg: #f3f4f6;
     --avatar-ai-bg: #10a37f;
     --avatar-user-bg: #6366f1;
-
+    
     --input-border: #d1d5db;
     --input-bg: #ffffff;
     --input-focus: #10a37f;
-
+    
     --btn-bg: #111827;
     --btn-color: #ffffff;
     --btn-disabled: #d1d5db;
-
-    --code-bg: #f5f5f5;
-    --code-header-bg: #e8e8e8;
-    --code-text: #1e1e1e;
-    --code-header-text: #666;
 }
 
 [data-theme="dark"] {
+    /* Dark Mode Palette */
     --bg-color: #212121;
     --nav-border: #2f2f2f;
     --text-primary: #ececec;
     --text-secondary: #9ca3af;
-
+    
     --ai-bg: #212121;
     --user-bg: #2f2f2f;
     --avatar-ai-bg: #10a37f;
     --avatar-user-bg: #6366f1;
-
+    
     --input-border: #383838;
     --input-bg: #2f2f2f;
     --input-focus: #10a37f;
-
+    
     --btn-bg: #ffffff;
     --btn-color: #111827;
     --btn-disabled: #4b5563;
-
-    --code-bg: #1e1e1e;
-    --code-header-bg: #2d2d2d;
-    --code-text: #d4d4d4;
-    --code-header-text: #b3b3b3;
 }
 
 /* Base Styles */
@@ -112,7 +104,7 @@ body {
     padding: 24px 0;
     display: flex;
     flex-direction: column;
-    scroll-behavior: auto;
+    scroll-behavior: smooth;
 }
 
 .message {
@@ -164,8 +156,9 @@ body {
     white-space: pre-wrap;
 }
 
-/* Code Block Formatting */
+/* Modern Code Block Formatting */
 .code-block-wrapper {
+    background-color: #1e1e1e;
     border: 1px solid var(--nav-border);
     border-radius: 8px;
     margin: 12px 0;
@@ -177,10 +170,10 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background-color: var(--code-header-bg);
+    background-color: #2d2d2d;
     padding: 8px 16px;
     font-size: 0.8rem;
-    color: var(--code-header-text);
+    color: #b3b3b3;
 }
 
 .code-lang {
@@ -192,7 +185,7 @@ body {
 .copy-btn {
     background: transparent;
     border: none;
-    color: var(--code-header-text);
+    color: #b3b3b3;
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -203,14 +196,14 @@ body {
 }
 
 .copy-btn:hover {
-    color: var(--text-primary);
+    color: #ffffff;
 }
 
 .code-block-wrapper pre {
     margin: 0;
     padding: 16px;
     overflow-x: auto;
-    background-color: transparent !important;
+    background-color: transparent !important; /* Let highlight.js handle it or inherit */
     border: none;
     border-radius: 0;
 }
@@ -333,61 +326,3 @@ textarea::placeholder {
     border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
-
-/* Markdown Optimizations */
-.markdown-block {
-    margin-bottom: 16px;
-}
-
-.markdown-block:last-child {
-    margin-bottom: 0;
-}
-
-.markdown-block p {
-    margin-bottom: 8px;
-}
-
-.markdown-block p:last-child {
-    margin-bottom: 0;
-}
-
-.streaming-cursor {
-    display: inline-block;
-    width: 2px;
-    height: 1.1em;
-    background-color: var(--avatar-ai-bg);
-    margin-left: 2px;
-    vertical-align: middle;
-    animation: cursor-blink 1.2s infinite;
-    position: relative;
-    top: 2px;
-}
-
-@keyframes cursor-blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0; }
-}
-
-.continuity-note {
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    background: var(--user-bg);
-    border-left: 3px solid var(--avatar-ai-bg);
-    padding: 10px 16px;
-    margin: 12px 0;
-    border-radius: 6px;
-    animation: slideUpFade 0.5s ease forwards;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    display: inline-block;
-}
-
-@keyframes slideUpFade {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
