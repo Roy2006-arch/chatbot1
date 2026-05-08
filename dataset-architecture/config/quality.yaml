@@ -1,0 +1,92 @@
+# Quality Configuration
+# Scoring dimensions and thresholds
+
+scoring:
+  dimensions:
+    relevance:
+      description: "How relevant is the response to the instruction"
+      weight: 0.25
+      min_threshold: 0.3
+      max_score: 1.0
+
+    correctness:
+      description: "Is the answer factually/technically correct"
+      weight: 0.25
+      min_threshold: 0.4
+      max_score: 1.0
+
+    completeness:
+      description: "Does the answer fully address the question"
+      weight: 0.15
+      min_threshold: 0.3
+      max_score: 1.0
+
+    clarity:
+      description: "How clear and well-structured is the response"
+      weight: 0.10
+      min_threshold: 0.3
+      max_score: 1.0
+
+    safety:
+      description: "Is the response safe, unbiased, and appropriate"
+      weight: 0.15
+      min_threshold: 0.6
+      max_score: 1.0
+
+    instruction_following:
+      description: "How well does the response follow given instructions"
+      weight: 0.10
+      min_threshold: 0.3
+      max_score: 1.0
+
+  composite_threshold: 0.50
+  top_k_ranking: 3
+
+filtering:
+  min_instruction_length: 5
+  max_instruction_length: 4096
+  min_output_length: 1
+  max_output_length: 32768
+  min_input_length: 0
+  max_input_length: 8192
+
+  remove_empty_output: true
+  remove_too_short_instruction: true
+  remove_too_long_instruction: true
+  remove_template_hallucinations: true
+  remove_refusal_patterns: true
+  remove_unsafe_content: true
+  remove_low_score: true
+
+deduplication:
+  method: "minhash"
+  threshold: 0.85
+  jaccard_threshold: 0.80
+  ngram_size: 5
+  num_permutations: 128
+  use_exact_dedup: true
+  use_semantic_dedup: true
+  semantic_model: "all-MiniLM-L6-v2"
+
+code_validation:
+  enabled: true
+  languages:
+    - python
+    - javascript
+    - typescript
+    - java
+    - cpp
+    - rust
+    - go
+    - sql
+  syntax_check: true
+  import_validation: true
+  max_code_length: 5000
+
+markdown_validation:
+  enabled: true
+  check_formatting: true
+  check_code_blocks: true
+  check_lists: true
+  check_tables: true
+  max_nesting_depth: 6

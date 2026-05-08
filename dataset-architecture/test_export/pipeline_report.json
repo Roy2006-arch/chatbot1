@@ -1,0 +1,27 @@
+{
+  "status": "success",
+  "stats": {
+    "code_sources": 100,
+    "bugs_injected": 104,
+    "examples_validated": 104,
+    "examples_valid": 78,
+    "training_examples": 234,
+    "pipeline_time": 11.82
+  },
+  "category_distribution": {
+    "off_by_one": 37,
+    "division_by_zero": 12,
+    "uninitialized_variable": 20,
+    "logic_error": 17,
+    "edge_case": 13,
+    "index_out_of_bounds": 5
+  },
+  "language_distribution": {
+    "python": 0.4,
+    "javascript": 0.25,
+    "java": 0.2,
+    "cpp": 0.15
+  },
+  "output_dir": "test_export",
+  "completed_at": "2026-05-08T20:45:55.111795"
+}

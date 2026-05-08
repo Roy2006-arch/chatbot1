@@ -177,13 +177,13 @@ class PromptAugmenter:
 
 class ResponseRewriter:
     _ROBOTIC_PHRASES = [
-        (r'As an AI(?: assistant|language model)?[,.]?\s*', ''),
-        (r'I would be delighted to[,.]?\s*', ''),
-        (r'Certainly(?:! Here are several options\.\.\.|[,!])\s*', ''),
-        (r'Based on your query[,.]?\s*', ''),
-        (r'Of course[,!]\s*', ''),
-        (r'Absolutely[,!]\s*', ''),
-        (r'Great question[,!]\s*', ''),
+        (re.compile(r'As an AI(?: assistant|language model)?[,.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'I would be delighted to[,.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'Certainly(?:! Here are several options\.\.\.|[,!])\s*', re.IGNORECASE), ''),
+        (re.compile(r'Based on your query[,.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'Of course[,!]\s*', re.IGNORECASE), ''),
+        (re.compile(r'Absolutely[,!]\s*', re.IGNORECASE), ''),
+        (re.compile(r'Great question[,!]\s*', re.IGNORECASE), ''),
     ]
 
     def rewrite(self, response: str, trace: ReasoningTrace, issues: list[str]) -> str:
@@ -192,7 +192,7 @@ class ResponseRewriter:
             return result
 
         for pattern, replacement in self._ROBOTIC_PHRASES:
-            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+            result = pattern.sub(replacement, result)
 
         if "Incomplete markdown code block" in " ".join(issues):
             if result.count("```") % 2 != 0:
@@ -223,6 +223,8 @@ class ResponseRewriter:
 
 
 class ReasoningPipeline:
+    _coding_classifier = None
+
     def __init__(self, refinement_threshold: float = 0.60):
         self.classifier = IntentClassifier()
         self.planner = InternalPlanner()
@@ -237,6 +239,13 @@ class ReasoningPipeline:
         self.threshold = refinement_threshold
         self._last_trace: Optional[ReasoningTrace] = None
 
+    @classmethod
+    def _get_coding_classifier(cls):
+        if cls._coding_classifier is None:
+            from backend.coding_intent import CodingIntentClassifier
+            cls._coding_classifier = CodingIntentClassifier()
+        return cls._coding_classifier
+
     def prepare_messages(self, user_message: str, messages: list[dict[str, str]]) -> tuple[list[dict[str, str]], ReasoningTrace]:
         t0 = time.perf_counter()
 
@@ -245,8 +254,7 @@ class ReasoningPipeline:
         is_challenge = False
         coding_sub_intent = ""
         if category in ["coding_problem", "debugging"]:
-            from backend.coding_intent import CodingIntentClassifier
-            coding_classifier = CodingIntentClassifier()
+            coding_classifier = self._get_coding_classifier()
             coding_intent = coding_classifier.classify(user_message)
             if coding_intent.is_coding:
                 coding_sub_intent = coding_intent.sub_intent

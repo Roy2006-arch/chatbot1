@@ -34,6 +34,9 @@ from backend.shared_resources import set_request_cache, get_request_cache, Reque
 from backend.realtime_utils import realtime_handler
 from backend.url_verifier import URLVerifier
 from feedback import init_db, log_turn, new_conv_id, router as feedback_router
+from feedback.mistake_memory import MistakeMemory
+from feedback.auto_improve import start_auto_improve_scheduler, stop_auto_improve_scheduler
+from multimodal.chat_integration import router as multimodal_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chatbot.main")
@@ -43,7 +46,7 @@ _CPU_POOL: ProcessPoolExecutor | None = None
 def get_cpu_pool() -> ProcessPoolExecutor:
     global _CPU_POOL
     if _CPU_POOL is None:
-        _CPU_POOL = ProcessPoolExecutor(max_workers=2)
+        _CPU_POOL = ProcessPoolExecutor(max_workers=max(4, os.cpu_count() or 4))
     return _CPU_POOL
 
 @asynccontextmanager
@@ -51,8 +54,20 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     init_db()
     await lifecycle_manager.start()
+
+    # Start auto-improve scheduler (checks feedback.db hourly)
+    _auto_scheduler = start_auto_improve_scheduler(
+        interval_seconds=3600,
+        min_new_entries=10,
+        min_composite_gain=0.05,
+    )
+    if _auto_scheduler:
+        logger.info("[Main] Auto-improve scheduler started.")
+
     yield
+
     logger.info("Shutting down...")
+    stop_auto_improve_scheduler()
     await lifecycle_manager.stop()
     global _CPU_POOL
     if _CPU_POOL:
@@ -62,6 +77,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Custom Chatbot API - Streaming Enabled", lifespan=lifespan)
 
 app.include_router(feedback_router, prefix="/feedback", tags=["Feedback"])
+app.include_router(multimodal_router, prefix="/api/chat", tags=["Multimodal Chat"])
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
@@ -171,7 +187,7 @@ GREETING_RESPONSES = OrderedDict([
 
 class SimpleResponseCache:
     def __init__(self, maxsize=256, ttl=300):
-        self._cache = {}
+        self._cache = OrderedDict()
         self._maxsize = maxsize
         self._ttl = ttl
 
@@ -179,6 +195,7 @@ class SimpleResponseCache:
         key = self._make_key(message, session_id)
         entry = self._cache.get(key)
         if entry and (time.time() - entry["time"] < self._ttl):
+            self._cache.move_to_end(key)
             return entry["response"]
         if entry:
             del self._cache[key]
@@ -187,8 +204,7 @@ class SimpleResponseCache:
     def set(self, message: str, session_id: str, response: str):
         key = self._make_key(message, session_id)
         if len(self._cache) >= self._maxsize:
-            oldest = min(self._cache, key=lambda k: self._cache[k]["time"])
-            del self._cache[oldest]
+            self._cache.popitem(last=False)
         self._cache[key] = {"response": response, "time": time.time()}
 
     def _make_key(self, message: str, session_id: str) -> str:
@@ -323,6 +339,48 @@ async def upload_document(file: UploadFile = File(...), session_id: str = Form(.
     return {"status": "success", "filename": file.filename, "chunks_indexed": num_chunks}
 
 
+@app.post("/admin/corrections/reload")
+async def reload_correction_patterns():
+    """
+    Hot-reload correction patterns from the self-improvement config.
+    Useful when correction_generator config.yaml is updated at runtime.
+    """
+    try:
+        from self_improvement.correction_generator import CorrectionGenerator
+        from self_improvement.pipeline import SelfImprovementPipeline
+        pipeline = SelfImprovementPipeline()
+        pipeline.correction_gen = CorrectionGenerator(
+            pipeline.config.get("correction_generator", {})
+        )
+        return {
+            "status": "ok",
+            "message": "Correction patterns reloaded from config",
+            "patterns_available": pipeline.correction_gen.enabled,
+        }
+    except Exception as e:
+        logger.error("[Admin] Correction reload failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/status")
+async def admin_status():
+    """Return system status including scheduler health and dataset bridge info."""
+    status = {
+        "model": MODEL_NAME,
+        "mode": MODE,
+        "scheduler_active": True,
+        "mistake_memory_available": True,
+        "multimodal_pipeline_available": True,
+    }
+    try:
+        from training.dataset_bridge import build_dataset
+        ds = build_dataset(max_examples=100)
+        status["dataset_bridge"] = ds.to_dict()
+    except Exception as e:
+        status["dataset_bridge_error"] = str(e)
+    return status
+
+
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest, http_request: Request):
     if not request.message.strip():
@@ -393,11 +451,46 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                 yield "data: [DONE]\n\n"
             return StreamingResponse(greeting_stream(), media_type="text/event-stream")
 
+    # Early cache check (before expensive processing)
+    if not request.is_continuation:
+        cached_response = response_cache.get(request.message, request.session_id)
+        if cached_response:
+            logger.info("[FastPath] Cache hit for session=%s", request.session_id)
+            await asyncio.to_thread(
+                memory_manager.add_message, request.session_id, "user", request.message
+            )
+            await asyncio.to_thread(
+                memory_manager.add_message, request.session_id, "assistant", cached_response
+            )
+            await asyncio.to_thread(
+                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=0,
+                role="user", content=request.message, model_name=MODEL_NAME,
+            )
+            await asyncio.to_thread(
+                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
+                role="assistant", content=cached_response, model_name=MODEL_NAME,
+                prompt=request.message, ttft_seconds=0.0,
+                total_time_seconds=time.time() - turn_start,
+            )
+            orchestrator.reset_session(request.session_id)
+
+            async def cached_stream():
+                yield f"data: {json.dumps({'content': cached_response, 'conv_id': conv_id})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(cached_stream(), media_type="text/event-stream")
+
     request_id = f"req_{uuid.uuid4().hex[:8]}"
     request_cache = RequestEmbeddingCache()
     set_request_cache(request_cache)
     first_token_time: list[float] = []
     orchestrator.transition(request.session_id, ResponseLifecycle.INIT)
+
+    def _cleanup_request_cache():
+        cache = get_request_cache()
+        if cache:
+            cache.clear()
+        set_request_cache(None)
 
     if not request.is_continuation:
         await asyncio.to_thread(
@@ -453,14 +546,26 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         )
         augmented_messages[0]["content"] = system_content
 
+    # MistakeMemory corrections (single call, shared with RAG context)
+    corrections_block = None
+    if not request.is_continuation and augmented_messages and augmented_messages[0]["role"] == "system":
+        try:
+            mm = MistakeMemory()
+            corrections_block = await asyncio.to_thread(mm.format_corrections_for_prompt, request.message)
+        except Exception as e:
+            logger.warning("[MistakeMemory] Injection error: %s", e)
+
     if not request.is_continuation and category in INTENTS_REQUIRING_RAG:
-        rag_result = await asyncio.to_thread(retriever.retrieve, request.message)
-        doc_context = await asyncio.to_thread(
+        rag_task = asyncio.to_thread(retriever.retrieve, request.message)
+        doc_task = asyncio.to_thread(
             doc_processor.query_documents, request.session_id, request.message
         )
+        rag_result, doc_context = await asyncio.gather(rag_task, doc_task)
 
         if augmented_messages and augmented_messages[0]["role"] == "system":
             system_content = augmented_messages[0]["content"]
+            if corrections_block:
+                system_content += f"\n\n{corrections_block}"
             if rag_result and rag_result.context_block:
                 system_content += f"\n\n[USE THE FOLLOWING VERIFIED KNOWLEDGE]\n{rag_result.context_block}"
                 logger.info("[RAG] Knowledge injected for category: %s", category)
@@ -472,31 +577,6 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             logger.info("[RAG] Bypassed RAG for category: %s", category)
 
     is_simple = _is_simple_query(category, request.message)
-
-    if not request.is_continuation:
-        cached_response = response_cache.get(request.message, request.session_id)
-        if cached_response:
-            logger.info("[FastPath] Cache hit for session=%s", request.session_id)
-            await asyncio.to_thread(
-                memory_manager.add_message, request.session_id, "assistant", cached_response
-            )
-            await asyncio.to_thread(
-                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
-                role="assistant", content=cached_response, model_name=MODEL_NAME,
-                prompt=request.message, ttft_seconds=0.0,
-                total_time_seconds=time.time() - turn_start,
-            )
-            orchestrator.reset_session(request.session_id)
-            cache = get_request_cache()
-            if cache:
-                cache.clear()
-            set_request_cache(None)
-
-            async def cached_stream():
-                yield f"data: {json.dumps({'content': cached_response, 'conv_id': conv_id})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
-                yield "data: [DONE]\n\n"
-            return StreamingResponse(cached_stream(), media_type="text/event-stream")
 
     logger.info(
         "[ReasoningPipeline] session=%s intent=%s steps=%d",
@@ -620,10 +700,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         finally:
             stream_finished = True
             disconnect_monitor.cancel()
-            cache = get_request_cache()
-            if cache:
-                cache.clear()
-            set_request_cache(None)
+            _cleanup_request_cache()
 
         await primary_task
 

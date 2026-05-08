@@ -1,0 +1,11 @@
+﻿python : ERROR: usage: __main__.py [options] [file_or_dir] [file_or_dir] [...]
+At line:1 char:1
++ python -m pytest tests\test_self_improvement\ -v --timeout=30 2>&1 |  ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ERROR: usage: _...e_or_dir] [...]:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+__main__.py: error: unrecognized arguments: --timeout=30
+  inifile: None
+  rootdir: D:\chatbot
+

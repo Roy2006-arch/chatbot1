@@ -83,16 +83,17 @@ class UnifiedOrchestrator:
     def process_chunk(self, session_id: str, chunk: str) -> str:
         state = self._get_state(session_id)
         with self._lock:
+            prev_len = len(state.buffer)
             state.buffer += chunk
             state.token_count += 1
 
-            backticks = re.findall(r"```", state.buffer)
-            state.markdown_open = len(backticks) % 2 != 0
-
-            if state.markdown_open:
-                match = re.search(r"```(\w+)\n", state.buffer)
-                if match:
-                    state.detected_language = match.group(1).lower()
+            if "`" in chunk:
+                backtick_count = state.buffer.count("```")
+                state.markdown_open = backtick_count % 2 != 0
+                if state.markdown_open and "```" in chunk:
+                    lang_match = re.search(r"```(\w+)", chunk)
+                    if lang_match:
+                        state.detected_language = lang_match.group(1).lower()
 
             for char in chunk:
                 if char in state.open_brackets:
@@ -104,21 +105,22 @@ class UnifiedOrchestrator:
                 elif char == ")":
                     state.open_brackets["("] = max(0, state.open_brackets["("] - 1)
 
-            lines = state.buffer.split("\n")
-            if len(lines) > 1:
-                line = lines[-2].strip()
-                if line:
-                    state.last_complete_line = line
+            if "\n" in chunk:
+                lines = state.buffer.split("\n")
+                if len(lines) > 1:
+                    line = lines[-2].strip()
+                    if line:
+                        state.last_complete_line = line
 
-            full_buffer = state.buffer
-            emit_until = len(full_buffer)
+            new_len = len(state.buffer)
+            emit_until = new_len
 
-            for pattern in self.UNSAFE_PATTERNS:
-                match = pattern.search(full_buffer)
+            for i, pattern in enumerate(self.UNSAFE_PATTERNS):
+                match = pattern.search(state.buffer, pos=prev_len)
                 if match:
                     emit_until = min(emit_until, match.start())
 
-            safe_to_emit = full_buffer[:emit_until]
+            safe_to_emit = state.buffer[:emit_until]
             new_content = safe_to_emit[state.emitted_length:]
             state.emitted_length += len(new_content)
 

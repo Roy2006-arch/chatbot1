@@ -1,0 +1,88 @@
+multimodal:
+  pipeline:
+    enabled: true
+    input_dir: "multimodal_data/input"
+    output_dir: "multimodal_data/output"
+    max_images: 500
+    max_screenshots: 500
+    max_pdfs: 100
+    run_id_prefix: "mm"
+    supported_formats:
+      - ".png"
+      - ".jpg"
+      - ".jpeg"
+      - ".gif"
+      - ".bmp"
+      - ".webp"
+      - ".pdf"
+
+  ocr:
+    enabled: true
+    languages: "eng"
+    min_confidence: 0.3
+    preprocess_image: true
+    cache_results: true
+    max_regions: 100
+
+  image_preprocessor:
+    enabled: true
+    max_width: 1024
+    max_height: 1024
+    min_width: 32
+    min_height: 32
+    max_size_mb: 20
+    normalize: true
+    default_format: "PNG"
+    jpeg_quality: 90
+
+  visual_qa:
+    enabled: true
+    min_caption_length: 5
+    max_caption_length: 200
+    caption_templates:
+      - "Describe this image in detail."
+      - "What is shown in this image?"
+      - "List the key elements visible in this image."
+      - "What can you infer from this image?"
+      - "Generate a detailed description of this image."
+    use_local_model: false
+    batch_size: 8
+
+  ui_analyzer:
+    enabled: true
+    min_element_area: 16
+    max_elements: 50
+    detect_buttons: true
+    detect_forms: true
+    detect_text_blocks: true
+    detect_images: true
+    layout_threshold: 0.5
+
+  pdf_processor:
+    enabled: true
+    extract_text: true
+    extract_images: true
+    min_page_chars: 10
+    max_pages: 50
+    image_dpi: 200
+
+  embedder:
+    enabled: true
+    model_name: "clip-ViT-B-32"
+    text_model: "sentence-transformers/all-MiniLM-L6-v2"
+    batch_size: 16
+    normalize_embeddings: true
+    cache_dir: ""
+
+  exporters:
+    enabled: true
+    formats:
+      - "llava"
+      - "openai_vision"
+      - "blip"
+      - "jsonl"
+    train_split: 0.8
+    val_split: 0.1
+    test_split: 0.1
+    include_images: true
+    max_examples_per_file: 10000

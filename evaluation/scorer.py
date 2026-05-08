@@ -13,14 +13,16 @@ import math
 from typing import Optional
 from sentence_transformers import SentenceTransformer, util
 
-# Shared model instance (loaded once at import time)
+from backend.shared_resources import ModelRegistry
+
+
 _EMBEDDER: Optional[SentenceTransformer] = None
 
 
 def _get_embedder() -> SentenceTransformer:
     global _EMBEDDER
     if _EMBEDDER is None:
-        _EMBEDDER = SentenceTransformer("all-MiniLM-L6-v2")
+        _EMBEDDER = ModelRegistry.get_embedder()
     return _EMBEDDER
 
 

@@ -1,0 +1,48 @@
+self_improvement:
+  pipeline:
+    max_failed_queries: 500
+    max_corrections: 200
+    max_high_quality: 300
+    max_hard_examples: 100
+    dataset_output: "self_improvement_data"
+    run_id_prefix: "si"
+
+  correction_generator:
+    enabled: true
+    min_score_before: 0.0
+    max_score_before: 0.6
+    min_quality_threshold: 0.6
+    use_local_model: false
+    batch_size: 10
+
+  quality_curator:
+    enabled: true
+    min_quality_score: 0.8
+    min_response_length: 20
+    max_response_length: 8000
+    max_examples_per_category: 50
+
+  hard_example_miner:
+    enabled: true
+    min_occurrence_count: 2
+    cluster_threshold: 0.75
+    max_examples_per_cluster: 10
+    embedding_model: "all-MiniLM-L6-v2"
+
+  dataset_builder:
+    enabled: true
+    train_split: 0.8
+    val_split: 0.1
+    test_split: 0.1
+    curriculum_order: true
+    include_metadata: true
+    formats:
+      - transformers
+      - openai
+
+  model_evaluator:
+    enabled: true
+    eval_dataset_path: ""
+    min_eval_cases: 10
+    score_threshold: 0.55
+    comparison_metric: "avg_composite"

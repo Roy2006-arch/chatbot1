@@ -1,0 +1,186 @@
+# Pipeline Configuration
+
+pipeline:
+  name: "advanced_chatbot_dataset_pipeline"
+  version: "1.0.0"
+  seed: 42
+  num_workers: 8
+  batch_size: 1000
+  max_retries: 3
+
+  stages:
+    - ingestion
+    - preprocessing
+    - validation
+    - quality_scoring
+    - deduplication
+    - filtering
+    - synthetic_augmentation
+    - curriculum_scoring
+    - export
+
+  paths:
+    raw_data: "data/raw"
+    processed_data: "data/processed"
+    curated_data: "data/curated"
+    logs: "logs"
+    cache: ".cache"
+    exports: "exports"
+
+  logging:
+    level: "INFO"
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    file_retention: 30
+
+  parallel:
+    enabled: true
+    max_workers: 16
+    chunk_size: 5000
+
+  checkpoint:
+    enabled: true
+    interval: 10000
+    resume_from_checkpoint: true
+
+# Export configurations
+export:
+  formats:
+    - jsonl
+    - parquet
+    - arrow
+
+  train_val_test_split:
+    train: 0.85
+    validation: 0.10
+    test: 0.05
+
+  hf_dataset:
+    push_to_hub: false
+    private: true
+
+  frameworks:
+    - transformers
+    - axolotl
+    - torch
+    - tensorflow
+
+# Open-source datasets to include
+datasets:
+  competitive_programming:
+    - name: "code_contests"
+      source: "huggingface"
+      path: "deepmind/code_contests"
+      max_samples: 100000
+
+    - name: "leetcode_solutions"
+      source: "huggingface"
+      path: "greenger/leetcode-solutions"
+      max_samples: 50000
+
+  algorithms_dsa:
+    - name: "code_alpaca"
+      source: "huggingface"
+      path: "sahil2801/CodeAlpaca-20k"
+      max_samples: 20000
+
+    - name: "dsa_problems"
+      source: "huggingface"
+      path: "bhavnicksm/codewars_data"
+      max_samples: 50000
+
+  debugging:
+    - name: "swe_bench"
+      source: "huggingface"
+      path: "princeton-nlp/SWE-bench"
+      max_samples: 20000
+
+    - name: "debugging_instructions"
+      source: "huggingface"
+      path: "microsoft/debugging_instructions"
+      max_samples: 30000
+
+  system_design:
+    - name: "system_design"
+      source: "custom"
+      path: "data/raw/system_design"
+      max_samples: 50000
+
+  general_reasoning:
+    - name: "bbh"
+      source: "huggingface"
+      path: "lukaemon/bbh"
+      max_samples: 50000
+
+    - name: "gsm8k"
+      source: "huggingface"
+      path: "openai/gsm8k"
+      max_samples: 50000
+
+  math_logic:
+    - name: "math_dataset"
+      source: "huggingface"
+      path: "math_dataset/math_dataset"
+      max_samples: 100000
+
+    - name: "meta_math_qa"
+      source: "huggingface"
+      path: "meta-math/MetaMathQA"
+      max_samples: 50000
+
+  conversational_ai:
+    - name: "ultrachat"
+      source: "huggingface"
+      path: "HuggingFaceH4/ultrachat_200k"
+      max_samples: 100000
+
+    - name: "oasst1"
+      source: "huggingface"
+      path: "OpenAssistant/oasst1"
+      max_samples: 50000
+
+    - name: "sharegpt"
+      source: "huggingface"
+      path: "RyokoAI/ShareGPT52K"
+      max_samples: 50000
+
+  technical_documentation:
+    - name: "doc_matcher"
+      source: "custom"
+      path: "data/raw/docs"
+      max_samples: 50000
+
+  tool_usage:
+    - name: "tool_bench"
+      source: "huggingface"
+      path: "sambanova/ToolBench"
+      max_samples: 50000
+
+  file_image_understanding:
+    - name: "chart_qa"
+      source: "huggingface"
+      path: "HuggingFaceM4/ChartQA"
+      max_samples: 30000
+
+synthetic:
+  generation:
+    enabled: true
+    max_synthetic_per_category: 100000
+    model: "gpt-4o-mini"
+    temperature: 0.7
+    top_p: 0.95
+    max_tokens: 2048
+
+  augmentation:
+    enabled: true
+    techniques:
+      - paraphrasing
+      - difficulty_scaling
+      - multi_turn_extension
+      - error_injection
+      - solution_variation
+
+  self_improvement:
+    enabled: true
+    iterations: 3
+    improvement_metric: "quality_score"
+    min_improvement_delta: 0.05

@@ -90,11 +90,13 @@ class ContextManager:
             state.last_accessed = time.time()
 
             if role == "user":
-                self._index_episodic(state, content)
                 self._extract_key_info(state, content)
 
             if len(state.window) > self.summarize_after:
                 self._compress_window(state)
+
+        if role == "user":
+            self._index_episodic(state, content)
 
     def get_messages(
         self,
@@ -152,15 +154,15 @@ class ContextManager:
         if not recent_assistant:
             return False
 
-        all_texts = [candidate] + recent_assistant
-        vecs = self._embed(all_texts)
-        cand_vec = vecs[0]
-        past_vecs = vecs[1:]
-
-        for past_vec in past_vecs:
-            sim = self._cosine(cand_vec, past_vec)
-            if sim >= self.dedup_threshold:
-                log.info("[ContextManager] Repetition detected (sim=%.3f)", sim)
+        candidate_tokens = set(candidate.lower().split())
+        for past in recent_assistant:
+            past_tokens = set(past.lower().split())
+            if len(candidate_tokens) < 5 or len(past_tokens) < 5:
+                continue
+            overlap = len(candidate_tokens & past_tokens)
+            jaccard = overlap / max(len(candidate_tokens | past_tokens), 1)
+            if jaccard > 0.7:
+                log.info("[ContextManager] Repetition detected (jaccard=%.3f)", jaccard)
                 return True
         return False
 
