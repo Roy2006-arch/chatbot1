@@ -10,9 +10,11 @@ python-dotenv
 numpy
 # RAG dependencies
 faiss-cpu
+rank_bm25
 PyPDF2
 beautifulsoup4
 # Inference
+vllm
 torch
 transformers
 # Optional: cross-encoder reranking (improves RAG accuracy, ~80MB download)

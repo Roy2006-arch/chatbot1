@@ -34,6 +34,7 @@ import logging
 import os
 import subprocess
 import uuid
+import math
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -60,18 +61,23 @@ def _priority_score(record: dict, max_downvotes: int = 10) -> float:
     Higher = more urgently needs retraining.
     Combines low auto-eval composite score and high downvote count.
     """
-    auto_score  = record.get("composite_score") or 0.5
-    downvote_ct = record.get("_downvote_count", 0)  # enriched externally
+    auto_score      = record.get("composite_score") or 0.5
+    downvote_ct     = record.get("_downvote_count", 0)  # enriched externally
+    occurrence_ct   = record.get("occurrence_count", 1)
 
     # Invert composite: lower score → higher urgency
     auto_priority = 1.0 - auto_score
 
     # Normalise downvote count
     feedback_priority = min(downvote_ct / max(max_downvotes, 1), 1.0)
+    
+    # Scale by occurrence count (repeated mistakes are more urgent)
+    # log scale to prevent extreme outliers from dominating
+    repetition_boost = math.log2(occurrence_ct + 1)
 
     return round(
-        PRIORITY_SCORE_WEIGHT * auto_priority +
-        FEEDBACK_WEIGHT       * feedback_priority,
+        (PRIORITY_SCORE_WEIGHT * auto_priority +
+         FEEDBACK_WEIGHT       * feedback_priority) * repetition_boost,
         4,
     )
 
@@ -81,7 +87,10 @@ def _enrich_with_downvote_counts(records: list[dict]) -> list[dict]:
     try:
         from .db_schema import get_conn
     except ImportError:
-        import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        import sys, os
+        root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        if root_path not in sys.path:
+            sys.path.insert(0, root_path)
         from feedback.db_schema import get_conn
     conn = get_conn()
     for rec in records:
@@ -128,6 +137,7 @@ def export_dpo_jsonl(records: list[dict], output_path: str = DPO_JSONL) -> int:
                 "rejected":        rec.get("response", ""),
                 "chosen":          rec.get("preferred_response", ""),  # blank until annotated
                 "priority_score":  _priority_score(rec, max_dv),
+                "occurrence_count": rec.get("occurrence_count", 1),
                 "composite_score": rec.get("composite_score"),
                 "grade":           rec.get("grade", "?"),
                 "failure_reasons": json.loads(rec.get("failure_reasons", "[]")),
@@ -198,7 +208,10 @@ def _mark_resolved(record_ids: list[int]) -> None:
     try:
         from .db_schema import get_conn
     except ImportError:
-        import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        import sys, os
+        root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        if root_path not in sys.path:
+            sys.path.insert(0, root_path)
         from feedback.db_schema import get_conn
     conn = get_conn()
     conn.executemany(
@@ -226,7 +239,10 @@ def _log_retrain_run(
     try:
         from .db_schema import get_conn
     except ImportError:
-        import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        import sys, os
+        root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        if root_path not in sys.path:
+            sys.path.insert(0, root_path)
         from feedback.db_schema import get_conn
     conn = get_conn()
     now = datetime.now(timezone.utc).isoformat()
@@ -278,7 +294,10 @@ def run_pipeline(
     try:
         from .feedback_store import load_failed_queries
     except ImportError:
-        import sys, os; sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        import sys, os
+        root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        if root_path not in sys.path:
+            sys.path.insert(0, root_path)
         from feedback.feedback_store import load_failed_queries
 
     run_id = str(uuid.uuid4())[:8]

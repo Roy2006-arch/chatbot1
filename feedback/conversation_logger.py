@@ -17,6 +17,7 @@ import logging
 from typing import Optional
 
 from .db_schema import get_conn, _now_utc
+from .mistake_memory import MistakeMemory
 
 # Lazy import to avoid loading sentence-transformers unless scoring is needed
 _scorer = None
@@ -28,10 +29,21 @@ def _get_scorer():
     global _scorer
     if _scorer is None:
         import sys, os
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "evaluation"))
+        eval_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "evaluation"))
+        if eval_path not in sys.path:
+            sys.path.insert(0, eval_path)
         import scorer as s
         _scorer = s
     return _scorer
+
+# Global singleton for mistake memory (expensive to reload model)
+_MISTAKE_MEM: MistakeMemory | None = None
+
+def _get_mistake_memory() -> MistakeMemory:
+    global _MISTAKE_MEM
+    if _MISTAKE_MEM is None:
+        _MISTAKE_MEM = MistakeMemory()
+    return _MISTAKE_MEM
 
 
 # ── Core logger ───────────────────────────────────────────────────────────────
@@ -142,27 +154,23 @@ def _store_failed_query(
     grade: Optional[str],
     failure_reasons: list,
     source: str = "auto",   # 'auto' | 'user'
-) -> int:
-    """Insert a record into failed_queries. Returns the new row id."""
-    conn = get_conn()
-    cur = conn.execute(
-        """
-        INSERT INTO failed_queries
-            (conv_id, session_id, prompt, response, composite_score, grade,
-             failure_reasons, source, timestamp_utc)
-        VALUES (?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            conv_id, session_id, prompt, response, composite_score, grade,
-            json.dumps(failure_reasons), source, _now_utc(),
-        ),
+) -> None:
+    """Records a failed query into failed_queries via MistakeMemory."""
+    mm = _get_mistake_memory()
+    mm.record_failure(
+        conv_id=conv_id,
+        session_id=session_id,
+        prompt=prompt,
+        response=response,
+        source=source,
+        composite_score=composite_score,
+        grade=grade,
+        failure_reasons=failure_reasons
     )
-    conn.commit()
     log.warning(
-        "[ConvLogger] Bad response stored → failed_queries#%d  source=%s  score=%.3f",
-        cur.lastrowid, source, composite_score or 0,
+        "[ConvLogger] Bad response recorded → MistakeMemory  source=%s  score=%.3f",
+        source, composite_score or 0,
     )
-    return cur.lastrowid
 
 
 # ── Session helpers ────────────────────────────────────────────────────────────

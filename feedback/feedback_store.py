@@ -31,8 +31,18 @@ import logging
 from typing import Optional
 
 from .db_schema import get_conn, _now_utc
+from .mistake_memory import MistakeMemory
 
 log = logging.getLogger("chatbot.feedback_store")
+
+# Global singleton for mistake memory (expensive to reload model)
+_MISTAKE_MEM: MistakeMemory | None = None
+
+def _get_mistake_memory() -> MistakeMemory:
+    global _MISTAKE_MEM
+    if _MISTAKE_MEM is None:
+        _MISTAKE_MEM = MistakeMemory()
+    return _MISTAKE_MEM
 
 # Responses with net_score at or below this are promoted for retraining
 RETRAIN_NET_SCORE_THRESHOLD = -2
@@ -113,51 +123,35 @@ def _handle_thumbs_down(
     prompt: str,
     response: str,
 ) -> None:
-    """
-    On thumbs-down: store as a failed query (source='user') unless already
-    present, and promote to retraining if net score is severely negative.
-    """
+    # Use MistakeMemory to handle similarity search and repeated mistake tracking
+    mm = _get_mistake_memory()
+    
+    # Fetch auto-eval scores from conversations table if available
     conn = get_conn()
-
-    # Only insert if not already in failed_queries for this turn
-    existing = conn.execute(
-        "SELECT id FROM failed_queries WHERE conv_id=? AND prompt=?",
-        (conv_id, prompt),
+    conv_row = conn.execute(
+        """
+        SELECT composite_score, grade, failure_reasons
+        FROM conversations
+        WHERE conv_id=? AND turn_index=? AND role='assistant'
+        """,
+        (conv_id, turn_index),
     ).fetchone()
 
-    if not existing:
-        # Fetch auto-eval scores from conversations table if available
-        conv_row = conn.execute(
-            """
-            SELECT composite_score, grade, failure_reasons
-            FROM conversations
-            WHERE conv_id=? AND turn_index=? AND role='assistant'
-            """,
-            (conv_id, turn_index),
-        ).fetchone()
+    composite = conv_row["composite_score"] if conv_row else None
+    grade     = conv_row["grade"] if conv_row else "?"
+    reasons   = json.loads(conv_row["failure_reasons"]) if conv_row else []
+    reasons.append("User reported 👎 thumbs-down")
 
-        composite = conv_row["composite_score"] if conv_row else None
-        grade     = conv_row["grade"] if conv_row else "?"
-        reasons   = json.loads(conv_row["failure_reasons"]) if conv_row else []
-        reasons.append("User reported 👎 thumbs-down")
-
-        conn.execute(
-            """
-            INSERT INTO failed_queries
-                (conv_id, session_id, prompt, response, composite_score,
-                 grade, failure_reasons, source, timestamp_utc)
-            VALUES (?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                conv_id, session_id, prompt, response, composite,
-                grade, json.dumps(reasons), "user", _now_utc(),
-            ),
-        )
-        conn.commit()
-        log.warning(
-            "[Feedback] Thumbs-down → failed_queries  conv=%s  turn=%d",
-            conv_id, turn_index,
-        )
+    mm.record_failure(
+        conv_id=conv_id,
+        session_id=session_id,
+        prompt=prompt,
+        response=response,
+        source="user",
+        composite_score=composite,
+        grade=grade,
+        failure_reasons=reasons
+    )
 
 
 def _check_net_score_for_recovery(conv_id: str, turn_index: int) -> None:

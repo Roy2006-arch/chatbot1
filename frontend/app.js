@@ -1,33 +1,59 @@
-// --- Configure marked.js with Custom Renderer and Highlight.js ---
-marked.use({
-    renderer: {
-        code(code, language) {
-            const validLang = language && hljs.getLanguage(language) ? language : 'plaintext';
-            const highlighted = validLang === 'plaintext' ? hljs.highlightAuto(code).value : hljs.highlight(code, { language: validLang }).value;
-            
-            return `
+// --- Optimized Markdown Renderer Configuration ---
+const customRenderer = {
+    code(code, language) {
+        const validLang = language && hljs.getLanguage(language) ? language : 'plaintext';
+        const highlighted = validLang === 'plaintext' 
+            ? hljs.highlightAuto(code).value 
+            : hljs.highlight(code, { language: validLang }).value;
+        
+        return `
 <div class="code-block-wrapper">
     <div class="code-block-header">
         <span class="code-lang">${validLang}</span>
-        <button class="copy-btn" onclick="copyCode(this)">
+        <button class="copy-btn" aria-label="Copy code">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
             Copy
         </button>
     </div>
     <pre><code class="hljs language-${validLang}">${highlighted}</code></pre>
 </div>`;
-        }
     }
-});
+};
+
+marked.use({ renderer: customRenderer });
 
 marked.setOptions({
-    breaks: true,        // Convert \n to <br>
-    gfm: true,           // GitHub Flavoured Markdown (tables, code blocks, etc.)
-    sanitize: false      // We trust our own backend output
+    breaks: true,
+    gfm: true,
+    headerIds: false,
+    mangle: false
 });
 
-// Global copy function
-window.copyCode = function(button) {
+// --- DOMPurify Configuration ---
+// We allow specific SVG tags and classes for Highlight.js
+const purifyConfig = {
+    ALLOWED_TAGS: [
+        'p', 'br', 'strong', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
+        'ul', 'ol', 'li', 'code', 'pre', 'span', 'div', 'button', 'svg', 
+        'path', 'rect', 'polyline', 'circle', 'line', 'blockquote', 'em', 'i'
+    ],
+    ALLOWED_ATTR: [
+        'class', 'id', 'xmlns', 'width', 'height', 'viewBox', 
+        'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 
+        'x', 'y', 'rx', 'ry', 'd', 'points', 'cx', 'cy', 'r', 'x1', 'y1', 'x2', 'y2',
+        'aria-label'
+    ]
+};
+
+function safeRender(container, html) {
+    container.innerHTML = DOMPurify.sanitize(html, purifyConfig);
+}
+
+// Event delegation for copy buttons
+document.addEventListener('click', (e) => {
+    const button = e.target.closest('.copy-btn');
+    if (!button) return;
+
     const wrapper = button.closest('.code-block-wrapper');
     const codeEl = wrapper.querySelector('code');
     const text = codeEl.textContent;
@@ -37,7 +63,7 @@ window.copyCode = function(button) {
         button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!';
         setTimeout(() => button.innerHTML = originalHTML, 2000);
     });
-};
+});
 
 const chatMessages = document.getElementById('chatMessages');
 const userInput = document.getElementById('userInput');
@@ -110,16 +136,143 @@ function createMessageElement(sender) {
 }
 
 function showTypingIndicator(contentDiv) {
-    contentDiv.innerHTML = `
+    safeRender(contentDiv, `
         <div class="typing-indicator" id="typingIndicator">
             <div class="typing-dot"></div>
             <div class="typing-dot"></div>
             <div class="typing-dot"></div>
         </div>
-    `;
+    `);
 }
 
 // --- Code Detection Logic ---
+// --- Optimized Streaming Renderer ---
+class StreamingRenderer {
+    constructor(container) {
+        this.container = container;
+        this.fullText = '';
+        this.tokenCache = [];
+        this.blockElements = []; 
+        this.tokenQueue = [];
+        this.rafId = null;
+        this.isComplete = false;
+        
+        this.cursor = document.createElement('span');
+        this.cursor.className = 'streaming-cursor';
+        this.cursor.textContent = '▌';
+    }
+
+    push(chunk) {
+        if (!chunk) return;
+        this.tokenQueue.push(chunk);
+        if (!this.rafId) {
+            this.rafId = requestAnimationFrame(() => this.processQueue());
+        }
+    }
+
+    processQueue() {
+        if (this.tokenQueue.length === 0) {
+            this.rafId = null;
+            return;
+        }
+
+        // Adaptive batching: more tokens per frame if queue is backed up
+        let tokensToProcess = 1;
+        const qLen = this.tokenQueue.length;
+        if (qLen > 100) tokensToProcess = Math.ceil(qLen / 5);
+        else if (qLen > 20) tokensToProcess = 5;
+        
+        const chunk = this.tokenQueue.splice(0, tokensToProcess).join('');
+        this.fullText += chunk;
+        this.render();
+
+        if (this.tokenQueue.length > 0) {
+            this.rafId = requestAnimationFrame(() => this.processQueue());
+        } else {
+            this.rafId = null;
+        }
+    }
+
+    render(isDone = false) {
+        this.isComplete = isDone;
+        let textToParse = this.fullText;
+        
+        if (!isDone) {
+            const matches = textToParse.match(/(?:^|\n)```/g) || [];
+            if (matches.length % 2 !== 0) {
+                textToParse += '\n```';
+            }
+        }
+
+        const tokens = marked.lexer(textToParse);
+        
+        tokens.forEach((token, index) => {
+            const cachedToken = this.tokenCache[index];
+            const isLast = index === tokens.length - 1;
+            
+            // Skip rendering if block is stable and unchanged
+            if (cachedToken && cachedToken.raw === token.raw && !isLast) {
+                return;
+            }
+
+            let element = this.blockElements[index];
+            if (!element) {
+                element = document.createElement('div');
+                element.className = 'markdown-block';
+                this.container.appendChild(element);
+                this.blockElements[index] = element;
+            }
+
+            // Incremental parse & render
+            safeRender(element, marked.parser([token]));
+            this.tokenCache[index] = { ...token };
+
+            if (isLast && !isDone) {
+                this.appendCursor(element);
+            }
+        });
+
+        // Cleanup
+        while (this.blockElements.length > tokens.length) {
+            this.blockElements.pop().remove();
+            this.tokenCache.pop();
+        }
+
+        this.scrollToBottom();
+    }
+
+    appendCursor(element) {
+        // Append cursor to the deepest text-friendly node
+        const target = element.lastElementChild || element;
+        if (target.tagName === 'PRE') {
+            // Don't append inside pre/code usually, or do it carefully
+            target.appendChild(this.cursor);
+        } else {
+            target.appendChild(this.cursor);
+        }
+    }
+
+    scrollToBottom() {
+        const chatArea = document.getElementById('chatMessages');
+        if (!chatArea) return;
+
+        const threshold = 150;
+        const isNearBottom = chatArea.scrollHeight - chatArea.scrollTop - chatArea.clientHeight < threshold;
+        
+        if (isNearBottom) {
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+    }
+
+    finish(finalText = null) {
+        if (finalText !== null) this.fullText = finalText;
+        this.render(true);
+        if (this.cursor.parentNode) {
+            this.cursor.parentNode.removeChild(this.cursor);
+        }
+    }
+}
+
 function detectCodeAndLanguage(text) {
     const lines = text.split('\n');
     
@@ -177,13 +330,13 @@ function renderUserMessage(text, container) {
             
             const header = document.createElement('div');
             header.className = 'code-block-header';
-            header.innerHTML = `
+            safeRender(header, `
                 <span class="code-lang">${lang}</span>
-                <button class="copy-btn" onclick="copyCode(this)">
+                <button class="copy-btn" aria-label="Copy code">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     Copy
                 </button>
-            `;
+            `);
 
             const pre = document.createElement('pre');
             const code = document.createElement('code');
@@ -241,54 +394,13 @@ async function sendMessage() {
     
     try {
         let fullResponse = '';
-        let tokenCount = 0;
-        let isComplete = false;
         let continuationCount = 0;
         const MAX_CONTINUATIONS = 3;
         
-        // Helper to safely render streaming markdown
-        const renderMarkdownStream = (text, isDone) => {
-            let renderText = text;
-            
-            // Robustly fix unclosed code blocks
-            const codeBlockMatches = text.match(/(?:^|\n)```/g) || [];
-            if (codeBlockMatches.length % 2 !== 0) {
-                renderText += '\n```\n';
-            }
-            
-            renderText += (isDone ? '' : ' ▌');
-            return marked.parse(renderText);
-        };
+        // Initialize optimized renderer
+        const renderer = new StreamingRenderer(aiContent);
+        aiContent.innerHTML = ''; // Clear typing indicator
 
-        // Token queue for smooth typing
-        let tokenQueue = [];
-        let renderLoopActive = true;
-
-        const processQueue = () => {
-            if (!renderLoopActive) return;
-
-            if (tokenQueue.length > 0) {
-                // Smooth typing: pop a subset of tokens depending on queue size
-                let tokensToPop = 1;
-                if (tokenQueue.length > 100) tokensToPop = Math.ceil(tokenQueue.length / 5);
-                else if (tokenQueue.length > 20) tokensToPop = 5;
-                else if (tokenQueue.length > 5) tokensToPop = 2;
-                
-                let chunk = tokenQueue.splice(0, tokensToPop).join('');
-                fullResponse += chunk;
-                
-                aiContent.innerHTML = renderMarkdownStream(fullResponse, false);
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            }
-            
-            requestAnimationFrame(processQueue);
-        };
-        // Start the debounced render loop
-        requestAnimationFrame(processQueue);
-
-        // Remove typing indicator once loop starts
-        aiContent.innerHTML = '';
-        
         let isContinuation = false;
         let streamDone = false;
 
@@ -350,15 +462,22 @@ async function sendMessage() {
                                 try {
                                     const parsed = JSON.parse(dataStr);
                                     if (parsed.content) {
-                                        tokenQueue.push(parsed.content);
-                                        tokenCount++;
+                                        renderer.push(parsed.content);
+                                        fullResponse += parsed.content;
+                                        
+                                        if (parsed.repaired) {
+                                            console.info("Response was auto-repaired by backend.");
+                                        }
                                     }
                                     
-                                    // If the backend sends a refined (final corrected) version, use that instead
                                     if (parsed.refined && parsed.full) {
                                         fullResponse = parsed.full;
-                                        tokenQueue = []; // Clear queue since we have the full replaced text
-                                        aiContent.innerHTML = renderMarkdownStream(fullResponse, false);
+                                        renderer.finish(fullResponse);
+                                    }
+                                    
+                                    if (parsed.incomplete) {
+                                        console.warn("Backend signaled incomplete response:", parsed.issues);
+                                        streamDone = false;
                                     }
                                 } catch (e) {
                                     console.warn("Parse error on chunk, buffering for retry...", e);
@@ -376,7 +495,14 @@ async function sendMessage() {
                     console.warn("Stream ended unexpectedly, triggering continuation...");
                     isContinuation = true;
                     continuationCount++;
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    
+                    // Visual feedback for continuation
+                    const statusNote = document.createElement('div');
+                    statusNote.className = 'continuity-note';
+                    statusNote.innerHTML = '<em>Continuity Manager: Resuming interrupted stream...</em>';
+                    aiContent.appendChild(statusNote);
+                    
+                    await new Promise(resolve => setTimeout(resolve, 800));
                 }
 
             } catch (error) {
@@ -387,29 +513,18 @@ async function sendMessage() {
             }
         } // end stream inner while loop
 
-        // Flush queue
-        if (tokenQueue.length > 0) {
-            fullResponse += tokenQueue.join('');
-            tokenQueue = [];
-        }
-
-        renderLoopActive = false; // stop queue processing
-
         // Final render cleanup
-        aiContent.innerHTML = renderMarkdownStream(fullResponse, true);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        renderer.finish();
 
-        // --- FIX 1: Hallucination guard fired (empty response) ---
         if (fullResponse.trim() === '') {
-            aiContent.innerHTML = marked.parse(
+            safeRender(aiContent, marked.parse(
                 '⚠️ *My response was filtered for safety. Please try rephrasing your message.*'
-            );
+            ));
         }
 
     } catch (error) {
-        // Ensure queue process stops
-        renderLoopActive = false;
-        aiContent.innerHTML = marked.parse('❌ **Error:** Could not reach the backend server. Please ensure it is running on `127.0.0.1:8000`.');
+        console.error("Chat error:", error);
+        safeRender(aiContent, marked.parse('❌ **Error:** Could not reach the backend server.'));
     }
 }
 

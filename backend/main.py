@@ -3,10 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 import threading
+from transformers import AutoTokenizer
 import json
+import re
 import asyncio
 import logging
 import time
@@ -14,8 +14,12 @@ import uuid
 from fastapi import UploadFile, File
 from backend.document_processor import DocumentProcessor
 from backend.reasoning_pipeline import ReasoningPipeline
-from backend.response_state_manager import ResponseStateManager, ResponseState
+from backend.unified_orchestrator import UnifiedOrchestrator, ResponseLifecycle
 from backend.rag import KnowledgeBase, DocumentIngestionPipeline, RAGRetriever
+from backend.stream_manager import StreamManager
+from backend.inference_manager import InferenceManager
+
+# inference_manager is now initialized after MODEL_NAME is defined
 
 # ── Feedback Loop System ──────────────────────────────────────────────────────
 import sys, os
@@ -53,28 +57,25 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 # Static files will be mounted at the end of the file to avoid route shadowing
 
-# --- 1. MODEL LOADING & OPTIMIZATION ---
-# Toggle between "fast" (GPT-2) and "best" (TinyLlama / Phi-3)
-# GPT-2 is very fast but poor at reasoning. TinyLlama is superior for custom tasks.
+# --- 1. MODEL LOADING & OPTIMIZATION (vLLM Managed) ---
 MODE = "best" 
-
 MODELS = {
     "fast": "gpt2",
     "best": "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 }
-
 MODEL_NAME = MODELS.get(MODE, "gpt2")
 
-print(f"Loading {MODEL_NAME} model in {MODE} mode...")
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-# OPTIMIZATION: Use 4-bit/8-bit quantization if 'bitsandbytes' is available
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME, 
-    device_map="auto" if torch.cuda.is_available() else None,
-    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+print(f"Initializing vLLM with {MODEL_NAME}...")
+# vLLM manages its own model loading and memory
+inference_manager = InferenceManager(
+    model_name=MODEL_NAME,
+    gpu_memory_utilization=0.85,
+    max_model_len=4096
 )
-print(f"Model '{MODEL_NAME}' loaded successfully!")
+
+# We still need a tokenizer for prompt formatting (apply_chat_template)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+print(f"Tokenizer loaded for {MODEL_NAME}")
 
 # --- 2. CONTEXT MEMORY ---
 from backend.context_manager import ContextManager
@@ -102,7 +103,23 @@ retriever      = RAGRetriever(
 
 # --- Reasoning & Refinement Middleware ---
 reasoning_pipeline = ReasoningPipeline(refinement_threshold=0.55)
-state_manager = ResponseStateManager()
+orchestrator = UnifiedOrchestrator()
+
+from backend.lifecycle_manager import MemoryLifecycleManager
+lifecycle_manager = MemoryLifecycleManager(
+    context_manager=memory_manager,
+    orchestrator=orchestrator,
+    cleanup_interval_seconds=300,
+    session_ttl_seconds=3600
+)
+
+@app.on_event("startup")
+async def startup_event():
+    await lifecycle_manager.start()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await lifecycle_manager.stop()
 
 from backend.response_middleware import ReasoningAuditMiddleware
 app.add_middleware(ReasoningAuditMiddleware, pipeline=reasoning_pipeline)
@@ -162,8 +179,10 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 
     # ── Feedback: conversation tracking ────────────────────────────────────
     conv_id    = request.get_or_create_conv_id()
+    request_id = f"req_{uuid.uuid4().hex[:8]}"
     turn_start = time.time()
     first_token_time: list[float] = []   # mutable container for closure capture
+    orchestrator.transition(request.session_id, ResponseLifecycle.INIT)
 
     # ── Feedback & Memory Tracking ─────────────────────────────────────────
     if not request.is_continuation:
@@ -180,6 +199,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 
         # ── Memory: record user turn ──────────────────────────────────────────
         await asyncio.to_thread(memory_manager.add_message, request.session_id, "user", request.message)
+        orchestrator.transition(request.session_id, ResponseLifecycle.RETRIEVAL)
 
         # ── Memory: retrieve context ──────────────────────────────────────────
         messages = await asyncio.to_thread(
@@ -191,16 +211,16 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             reasoning_pipeline.prepare_messages, request.message, messages
         )
         
-        if getattr(reasoning_trace, 'is_coding_challenge', False) or reasoning_trace.intent_category == "coding":
-            state_manager.set_state(request.session_id, ResponseState.CODING_SOLVER)
-        else:
-            state_manager.set_state(request.session_id, ResponseState.NORMAL_CHAT)
+        if getattr(reasoning_trace, 'is_coding_challenge', False) or reasoning_trace.intent_category == "coding_problem":
+            # continuity_manager.set_state(...) - currently handled via status in state
+            pass
     else:
         # Continuation flow: skip logging user turn, just get context
         messages = await asyncio.to_thread(
             memory_manager.get_messages, request.session_id, current_query=""
         )
-        recovery_prompt = state_manager.get_recovery_prompt(request.session_id)
+        orchestrator.transition(request.session_id, ResponseLifecycle.RETRIEVAL)
+        recovery_prompt = orchestrator.get_recovery_prompt(request.session_id)
         content_msg = recovery_prompt if recovery_prompt else "Please continue exactly where you left off. Output ONLY the continued text, no conversational intro."
         augmented_messages = messages + [{
             "role": "user", 
@@ -210,9 +230,10 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             intent_category = "coding"  # Give a high token budget
             steps = []
         reasoning_trace = FakeTrace()
+        orchestrator.transition(request.session_id, ResponseLifecycle.GENERATION)
 
     # ── RAG ROUTING: Only use RAG if intent requires factual knowledge ────
-    INTENTS_REQUIRING_RAG = ["factual", "coding", "math", "instruction", "general", "clarification", "debugging", "brainstorming"]
+    INTENTS_REQUIRING_RAG = ["coding_problem", "debugging", "explanation", "architecture", "optimization", "document_query", "general"]
     category = reasoning_trace.intent_category
     
     if not request.is_continuation and category in INTENTS_REQUIRING_RAG:
@@ -243,111 +264,148 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         "[ReasoningPipeline] session=%s intent=%s steps=%d",
         request.session_id, reasoning_trace.intent_category, len(reasoning_trace.steps)
     )
+    orchestrator.transition(request.session_id, ResponseLifecycle.GENERATION)
 
-    # ── Tokenize ──────────────────────────────────────────────────────────
-    # ── Tokenize ──────────────────────────────────────────────────────────
+    # ── Prompt Formatting (vLLM takes raw string or tokens) ───────────────
     if hasattr(tokenizer, "apply_chat_template") and MODE == "best":
         formatted_prompt = tokenizer.apply_chat_template(augmented_messages, tokenize=False, add_generation_prompt=True)
-        inputs = tokenizer(formatted_prompt, return_tensors="pt")
     else:
-        # Fallback for models without templates
         full_text = ""
         for m in augmented_messages:
             full_text += f"{m['role']}: {m['content']}\n\n"
         full_text += "assistant:"
-        inputs = tokenizer(full_text, return_tensors="pt")
+        formatted_prompt = full_text
 
-    if torch.cuda.is_available():
-        inputs = {k: v.to('cuda') for k, v in inputs.items()}
+    # ── Stream Orchestration ─────────────────────────────────────────────
+    orchestrator.transition(request.session_id, ResponseLifecycle.STREAMING)
+    stream_manager = StreamManager(
+        conv_id=conv_id, 
+        session_id=request.session_id,
+        continuity_manager=orchestrator
+    )
+    # queue_streamer is no longer needed with vLLM
 
-    streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
-
-    # ── Rule 3: Unrestricted length control ──────────────────────────────────
-    # Removed arbitrary intent-based token constraints to prevent the model 
-    # from artificially cutting off code blocks or long explanations.
     max_new_tokens = 8192
-
+    num_candidates = 2 if category == "coding_problem" and not request.is_continuation else 1
+    
     generation_kwargs = dict(
-        **inputs,
-        streamer=streamer,
         max_new_tokens=max_new_tokens,
-        temperature=0.6,
+        temperature=0.7,
         repetition_penalty=1.1,
-        do_sample=True,
         top_p=0.9,
-        pad_token_id=tokenizer.eos_token_id
+        stop=[tokenizer.eos_token] if hasattr(tokenizer, "eos_token") else None
     )
 
-    # Start generation in background thread
-    thread = threading.Thread(target=model.generate, kwargs=generation_kwargs)
-    thread.start()
+    # ── Background Generation Tasks (vLLM Optimized) ──────────────────────
+    async def generate_primary():
+        """Generates the first candidate with streaming."""
+        try:
+            sampling_kwargs = generation_kwargs.copy()
+            # vLLM doesn't use 'streamer', it uses an async generator
+            
+            async for token in inference_manager.generate_stream(
+                prompt=formatted_prompt,
+                request_id=f"{request_id}_p",
+                sampling_kwargs=sampling_kwargs
+            ):
+                # Feed tokens to the existing stream_manager logic
+                await stream_manager.put(token)
+                
+        except Exception as e:
+            logger.error(f"Primary generation error for {request_id}: {e}")
+        finally:
+            await stream_manager.finalize()
+
+    async def generate_secondary():
+        """Generates additional candidates in the background."""
+        if num_candidates <= 1:
+            return []
+        try:
+            sec_kwargs = generation_kwargs.copy()
+            sec_kwargs.update({
+                "temperature": 0.85,
+                "n": num_candidates - 1
+            })
+            
+            outputs = await inference_manager.generate_full(
+                prompt=formatted_prompt,
+                request_id=f"{request_id}_s",
+                sampling_kwargs=sec_kwargs
+            )
+            return outputs
+        except Exception as e:
+            logger.error(f"Secondary generation error for {request_id}: {e}")
+            return []
+
+    # Start primary generation immediately
+    primary_task = asyncio.create_task(generate_primary())
+    # Start secondary generation if needed
+    secondary_task = asyncio.create_task(generate_secondary())
 
     # ── SSE streaming generator ───────────────────────────────────────────
     async def event_generator():
         draft_text = ""
-        for new_text in streamer:
-            if await http_request.is_disconnected():
-                logger.warning("Client disconnected — stopping stream.")
-                state_manager.flag_interrupted(request.session_id)
-                break
+        
+        # Monitor client disconnection
+        async def check_disconnect():
+            while not primary_task.done():
+                if await http_request.is_disconnected():
+                    logger.warning(f"Client disconnected for {request_id} — stopping generation.")
+                    # vLLM handles cancellation when the generator is dropped/cancelled
+                    primary_task.cancel()
+                    secondary_task.cancel()
+                    stream_manager.stop()
+                    
+                    orchestrator.set_interrupted(request.session_id)
+                    break
+                await asyncio.sleep(0.5)
 
-            # Record time-to-first-token
-            if not first_token_time:
-                first_token_time.append(time.time() - turn_start)
+        disconnect_monitor = asyncio.create_task(check_disconnect())
 
-            temp_text = draft_text + new_text
+        # Consume the stream
+        async for event in stream_manager.event_generator():
+            # Extract content from event for local tracking
+            if "content" in event:
+                try:
+                    data = json.loads(event.replace("data: ", ""))
+                    if "content" in data:
+                        draft_text += data["content"]
+                except:
+                    pass
             
-            # Halt on role-leakage hallucination or special tokens
-            # Optimized: Only check the tail to prevent O(N^2) lag
-            stop_tokens = ["<|user|>", "<|assistant|>", "<|system|>", "</s>", "\nuser:", "\nassistant:", "\nsystem:"]
-            tail = temp_text[-50:].lower()
-            if any(token in tail for token in stop_tokens):
-                break
+            # Record time-to-first-token
+            if not first_token_time and stream_manager.tokens_yielded > 0:
+                first_token_time.append(time.time() - turn_start)
+                
+            yield event
 
-            draft_text += new_text
-            state_manager.update_generation(request.session_id, new_text)
-            yield f"data: {json.dumps({'content': new_text, 'conv_id': conv_id})}\n\n"
-            await asyncio.sleep(0.01)
+        # Wait for both tasks to complete
+        await primary_task
+        secondary_candidates = await secondary_task
+        disconnect_monitor.cancel()
 
+        all_candidates = [draft_text.strip()] + secondary_candidates
+        
         # ── REASONING PIPELINE: Phase B — validate & refine ──────────────
         final_response, reasoning_trace_updated = await asyncio.to_thread(
-            reasoning_pipeline.refine, request.message, draft_text.strip(), reasoning_trace
+            reasoning_pipeline.refine, 
+            request.message, 
+            draft_text.strip(), 
+            reasoning_trace,
+            candidates=all_candidates if len(all_candidates) > 1 else None,
+            context=rag_result.context_block if 'rag_result' in locals() else ""
         )
 
         if reasoning_trace_updated.refinement_applied:
-            logger.info(
-                "[ReasoningPipeline] Refinement applied | issues=%s",
-                reasoning_trace_updated.draft_issues
-            )
-            # Push correction delta to frontend so it shows the refined version
-            # (only if the text actually changed)
+            logger.info("[ReasoningPipeline] Refinement applied.")
             if final_response.strip() != draft_text.strip():
                 yield f"data: {json.dumps({'content': '', 'refined': True, 'full': final_response, 'conv_id': conv_id})}\n\n"
 
-        # ── Repetition guard ──────────────────────────────────────────────
-        is_repeat = await asyncio.to_thread(
-            memory_manager.is_repetitive_answer,
-            request.session_id, final_response
-        )
-        if is_repeat:
-            logger.info(
-                "[ContextManager] Suppressing repetitive answer for session=%s",
-                request.session_id
-            )
-            # Append a gentle note so the user knows the model noticed
-            final_response += (
-                "\n\n*(I noticed I may have answered this before — "
-                "let me know if you'd like a different perspective!)*"
-            )
-
-        # Persist the refined (higher-quality) response to memory
-        await asyncio.to_thread(
-            memory_manager.add_message, request.session_id, "assistant", final_response
-        )
-
-        # ── Feedback: log assistant turn with auto-eval ────────────────────
+        # Persist response and log
+        await asyncio.to_thread(memory_manager.add_message, request.session_id, "assistant", final_response)
+        
         total_elapsed = time.time() - turn_start
-        ttft           = first_token_time[0] if first_token_time else 0.0
+        ttft = first_token_time[0] if first_token_time else 0.0
         await asyncio.to_thread(
             log_turn,
             conv_id=conv_id,
@@ -361,16 +419,78 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             total_time_seconds=total_elapsed,
         )
 
-        is_complete = state_manager.update_generation(request.session_id, "")
-        if not is_complete:
-            state_manager.flag_interrupted(request.session_id)
-            logger.warning("Generation incomplete. Triggering automatic continuation.")
-            yield f"data: {json.dumps({'incomplete': True, 'conv_id': conv_id})}\n\n"
-        else:
-            state_manager.finalize_response(request.session_id)
-            yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
+        # --- AUTOMATIC CONTINUATION LOOP ---
+        MAX_AUTORETRY = 1
+        retry_count = 0
+        
+        # Initial Validation
+        validation = orchestrator.validate_and_finalize(request.session_id)
+        if not validation["is_valid"] and validation["repair_suffix"]:
+            yield f"data: {json.dumps({'content': validation['repair_suffix'], 'repaired': True, 'conv_id': conv_id})}\n\n"
+        
+        while orchestrator.get_current_state(request.session_id) == ResponseLifecycle.RECOVERY and retry_count < MAX_AUTORETRY:
+            retry_count += 1
+            logger.info(f"[AutoContinuation] Triggering automatic continuation (Retry {retry_count}/{MAX_AUTORETRY})")
+            
+            # Prepare recovery context
+            recovery_prompt = orchestrator.get_recovery_prompt(request.session_id)
+            # Use current messages + recovery prompt
+            continuation_messages = augmented_messages + [{"role": "user", "content": recovery_prompt}]
+            
+            # Re-tokenize
+            if hasattr(tokenizer, "apply_chat_template") and MODE == "best":
+                formatted_prompt_cont = tokenizer.apply_chat_template(continuation_messages, tokenize=False, add_generation_prompt=True)
+            else:
+                formatted_prompt_cont = formatted_prompt + "\n\n" + recovery_prompt + "\nassistant:"
+            
+            # Reset stream manager for new pass
+            stream_manager.reset() # Need to implement reset or create new one
+            # queue_streamer is no longer needed
+            
+            # Define new generation task
+            async def generate_continuation():
+                try:
+                    cont_kwargs = generation_kwargs.copy()
+                    
+                    async for token in inference_manager.generate_stream(
+                        prompt=formatted_prompt_cont,
+                        request_id=f"{request_id}_cont_{retry_count}",
+                        sampling_kwargs=cont_kwargs
+                    ):
+                        await stream_manager.put(token)
+                finally:
+                    await stream_manager.finalize()
+            
+            cont_task = asyncio.create_task(generate_continuation())
+            
+            # Yield from continuation stream
+            async for event in stream_manager.event_generator():
+                if "content" in event:
+                    try:
+                        data = json.loads(event.replace("data: ", ""))
+                        if "content" in data:
+                            draft_text += data["content"]
+                    except: pass
+                yield event
+            
+            await cont_task
+            
+            # Re-validate
+            validation = orchestrator.validate_and_finalize(request.session_id)
+            if not validation["is_valid"] and validation["repair_suffix"]:
+                yield f"data: {json.dumps({'content': validation['repair_suffix'], 'repaired': True, 'conv_id': conv_id})}\n\n"
 
+        # Final check
+        if orchestrator.get_current_state(request.session_id) == ResponseLifecycle.FINALIZED:
+            orchestrator.reset_session(request.session_id)
+            yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
+        else:
+            logger.warning(f"Session {request.session_id} still not finalized after {retry_count} retries.")
+            yield f"data: {json.dumps({'done': True, 'interrupted': True, 'conv_id': conv_id})}\n\n"
+        
         yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

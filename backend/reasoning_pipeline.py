@@ -40,6 +40,13 @@ class ReasoningTrace:
     intent_category: str = "general"
     coding_sub_intent: str = ""
     is_coding_challenge: bool = False
+    
+    # NEW: Stage 3 — Internal Planning fields
+    reasoning_strategy: str = "step_by_step"
+    response_depth:     str = "intermediate"  # beginner | intermediate | advanced
+    response_mode:      str = "normal"        # normal | locked_solver
+    output_structure:   str = "default"
+    
     steps:           list[str] = field(default_factory=list)
     draft_issues:    list[str] = field(default_factory=list)
     refinement_applied: bool = False
@@ -47,28 +54,24 @@ class ReasoningTrace:
 
 
 # ---------------------------------------------------------------------------
-# Step 1 — Intent Classifier
+# Stage 1 — Intent Classifier
 # ---------------------------------------------------------------------------
 
 class IntentClassifier:
     """
     Rule-based intent classifier.
-    Categories: factual | coding | math | opinion | clarification |
-                instruction | greeting | complaint | general
+    Categories: coding_problem | debugging | explanation | architecture | 
+                optimization | casual_chat | document_query
     """
 
     _PATTERNS: list[tuple[str, str]] = [
-        (r"\b(hello|hi|hey|good morning|good evening|howdy|greetings|sup|yo)\b", "greeting"),
-        # debugging must come before coding so "fix"/"bug" route correctly
+        (r"\b(hello|hi|hey|good morning|good evening|howdy|greetings|sup|yo)\b", "casual_chat"),
         (r"\b(debug|fix the bug|traceback|stack trace|exception|why is this failing|not working as expected|diagnose|runtime error|syntax error)\b", "debugging"),
-        (r"\b(brainstorm|ideas for|come up with|suggest ideas|think of|what are some ways|alternatives|possibilities|generate ideas|creative ideas)\b", "brainstorming"),
-        (r"\b(how to|steps to|guide|tutorial|explain|walk me through|steps for|procedure)\b", "instruction"),
-        (r"\b(write|code|implement|function|class|script|python|javascript|java|cpp|c#|html|css)\b", "coding"),
-        (r"\b(calculate|solve|equation|math|integral|derivative|sum of|probability|maths|formula)\b", "math"),
-        (r"\b(what is|who is|when did|where is|define|meaning of|tell me about|details on|info on|fact check|history of)\b", "factual"),
-        (r"\b(should i|do you think|opinion|better|worse|recommend|suggest)\b", "opinion"),
-        (r"\b(clarify|what do you mean|can you explain|elaborate|more detail)\b", "clarification"),
-        (r"\b(not working|broken|wrong|incorrect|bad|terrible|frustrated|annoyed)\b", "complaint"),
+        (r"\b(architecture|design|structure|system design|scalability|blueprint|infrastructure)\b", "architecture"),
+        (r"\b(optimize|make it faster|performance|efficient|bottleneck|refactor)\b", "optimization"),
+        (r"\b(explain|how does|what is|define|clarify|elaborate|walk me through)\b", "explanation"),
+        (r"\b(solve|implement|write code|code for|function|class|program|challenge|problem)\b", "coding_problem"),
+        (r"\b(document|pdf|file|read this|search in|find in document)\b", "document_query"),
     ]
 
     def classify(self, message: str) -> tuple[str, str]:
@@ -79,7 +82,6 @@ class IntentClassifier:
         if "```" in message:
             has_code = True
         else:
-            # Look for common language signatures (Python, JS, Java, C++, SQL, etc.)
             code_signatures = [
                 r"\bdef \w+\(", r"\bclass \w+:", r"\bimport \w+",    # Python
                 r"\bfunction\s*\(?", r"\bconst \w+\s*=", r"=>",       # JavaScript
@@ -87,128 +89,80 @@ class IntentClassifier:
                 r"#include\s*<", r"\bstd::",                          # C++
                 r"SELECT .* FROM", r"UPDATE .* SET"                   # SQL
             ]
-            has_code = any(re.search(p, message) for p in code_signatures)
+            has_code = any(re.search(p, message, re.IGNORECASE) for p in code_signatures)
 
         # 2. Standard Intent Matching
         msg_lower = message.lower()
         for pattern, category in self._PATTERNS:
             if re.search(pattern, msg_lower):
-                # If code is present but intent doesn't match coding/debugging inherently, upgrade it
-                if has_code and category not in ["coding", "debugging"]:
-                    return "User is asking a question or requesting a fix for the provided code.", "debugging"
+                if has_code and category not in ["coding_problem", "debugging", "explanation", "optimization"]:
+                    return "User provided code and is requesting assistance.", "debugging"
                     
                 intent_summary = f"User is making a {category} request."
                 return intent_summary, category
                 
         # 3. Fallbacks
         if has_code:
-            return "User provided a raw code snippet. They likely want it reviewed or explained.", "coding"
+            return "User provided a code snippet. Assumed coding challenge or implementation task.", "coding_problem"
 
         return "User is making a general request.", "general"
 
 
 # ---------------------------------------------------------------------------
-# Step 2 — Problem Decomposer
+# Stage 3 — Internal Planner (was ProblemDecomposer)
 # ---------------------------------------------------------------------------
 
-class ProblemDecomposer:
+class InternalPlanner:
     """
-    Breaks a user message into reasoning sub-steps based on intent category.
-    These steps are used to construct a richer prompt prefix.
+    Identifies required output structure, estimates response depth,
+    determines reasoning strategy, and determines response mode.
     """
 
+    _DEPTH_INDICATORS = {
+        "beginner": r"\b(beginner|basic|simple|eli5|easy|start|introduction|learn)\b",
+        "advanced": r"\b(advanced|complex|deep dive|professional|expert|senior|optimized|high performance)\b"
+    }
+
     _TEMPLATES: dict[str, list[str]] = {
-        "factual": [
-            "Recall relevant facts and definitions.",
-            "Cross-check for potential ambiguity in the question.",
-            "Provide a clear, direct answer with supporting context.",
-        ],
-        "coding:direct_solution": [
+        "coding_problem": [
             "Identify this as a coding challenge and lock into CODE SOLVER MODE.",
-            "Provide a short approach explanation (2–4 lines maximum).",
-            "Write the complete, final working code.",
-            "Provide Time Complexity.",
-            "Provide Space Complexity.",
-            "Strictly follow the MANDATORY RESPONSE FORMAT structure: Approach -> Code -> Time Complexity -> Space Complexity."
-        ],
-        "coding:debugging": [
-            "Identify the root cause of the error or unexpected behavior.",
-            "Explain why it happens in plain terms.",
-            "Provide a concrete fix with corrected code if applicable.",
-            "Mention how to avoid the issue in the future."
-        ],
-        "coding:explanation": [
-            "Break down the provided code step by step.",
-            "Explain what each part does and how it contributes to the overall logic.",
-            "Avoid rewriting the code unless a simplification helps understanding."
-        ],
-        "coding:optimization": [
-            "Analyze the current time and space complexity.",
-            "Identify bottlenecks in the code.",
-            "Provide an optimized version with improved complexity.",
-            "Explain the improvements clearly."
-        ],
-        "coding:conversion": [
-            "Identify the source language and the target language.",
-            "Translate the logic idiomatically to the target language.",
-            "Note any language-specific differences or caveats."
-        ],
-        "coding:algorithm": [
-            "Explain the theoretical concept behind the algorithm.",
-            "Walk through an example of how it works.",
-            "Discuss its typical use cases and complexities."
-        ],
-        "coding": [
-            "Understand the programming task and language constraints.",
-            "Plan the solution approach (algorithm / data structure).",
-            "Write clean, commented code.",
-            "Add usage examples or edge-case notes.",
-        ],
-        "math": [
-            "Identify the mathematical concept and required operations.",
-            "Lay out the step-by-step solution method.",
-            "Compute and verify the result.",
-            "Explain the reasoning so the user can learn from it.",
-        ],
-        "instruction": [
-            "Break the task into ordered, actionable steps.",
-            "Highlight prerequisites or caveats up front.",
-            "Provide each step with enough detail to follow independently.",
-        ],
-        "opinion": [
-            "Acknowledge this is a subjective or preference-based question.",
-            "Present balanced perspectives where applicable.",
-            "Offer a concrete recommendation with clear reasoning.",
-        ],
-        "clarification": [
-            "Identify which part of the previous response was unclear.",
-            "Rephrase the explanation using simpler language or an analogy.",
-            "Invite follow-up if still unclear.",
-        ],
-        "complaint": [
-            "Acknowledge the user's frustration empathetically.",
-            "Diagnose what went wrong without being defensive.",
-            "Propose a clear corrective action or alternative.",
+            "Identify required output structure: Approach -> Code -> Complexity.",
+            "Determine reasoning strategy: Algorithmic decomposition and complexity analysis.",
+            "Generate structured draft response with complete compilable code.",
+            "Strictly follow the MANDATORY RESPONSE FORMAT."
         ],
         "debugging": [
-            "Identify the root cause of the error or unexpected behavior.",
-            "Explain why it happens in plain terms.",
-            "Provide a concrete fix with corrected code if applicable.",
-            "Mention how to avoid the issue in the future.",
+            "Provide a concrete fix with corrected code.",
+            "Validate syntax internally.",
         ],
-        "brainstorming": [
-            "Generate a range of distinct, creative ideas relevant to the topic.",
-            "Keep each idea concise — a sentence or two max.",
-            "Prioritize variety and usefulness over quantity.",
+        "explanation": [
+            "Break down the concept or code step by step.",
+            "Improve clarity and technical precision.",
+            "Avoid rewriting code unless necessary.",
         ],
-        "greeting": [
-            "Respond naturally and personably in one short sentence.",
-            "Do NOT offer a numbered list of options or ask how to assist in a robotic way.",
+        "architecture": [
+            "Identify high-level components and their interactions.",
+            "Evaluate scalability and maintainability.",
+            "Provide structured design suggestions.",
+        ],
+        "optimization": [
+            "Identify performance bottlenecks.",
+            "Suggest algorithmic or structural improvements.",
+            "Explain the trade-offs clearly.",
+        ],
+        "casual_chat": [
+            "Respond naturally and personably.",
+            "Keep it brief and helpful.",
+        ],
+        "document_query": [
+            "Retrieve relevant context from documents.",
+            "Ground claims in retrieved context.",
+            "Summarize findings accurately.",
         ],
         "general": [
-            "Understand the core of the user's request.",
-            "Provide a helpful, well-structured response.",
-            "Offer to elaborate or clarify if needed.",
+            "Understand the core request.",
+            "Identify reasoning strategy.",
+            "Provide a structured, complete response.",
         ],
     }
 
@@ -222,192 +176,140 @@ class ProblemDecomposer:
                     return self._TEMPLATES[key]
         return self._TEMPLATES.get(category, self._TEMPLATES["general"])
 
+    def plan(self, message: str, category: str, is_challenge: bool = False) -> tuple[ReasoningTrace, list[str]]:
+        """
+        Creates a reasoning trace and determines the steps needed to solve the problem.
+        """
+        trace = ReasoningTrace(intent_category=category, is_coding_challenge=is_challenge)
+        
+        # 1. Determine Depth
+        msg_lower = message.lower()
+        for depth, pattern in self._DEPTH_INDICATORS.items():
+            if re.search(pattern, msg_lower):
+                trace.response_depth = depth
+                break
+        
+        # 2. Determine Strategy & Mode
+        if category == "coding_problem" or is_challenge:
+            trace.response_mode = "locked_solver"
+            trace.reasoning_strategy = "algorithmic_decomposition"
+            trace.output_structure = "Approach -> Code -> Complexity"
+        elif category == "debugging":
+            trace.reasoning_strategy = "root_cause_analysis"
+            trace.output_structure = "Diagnosis -> Fix -> Verification"
+        elif category == "explanation":
+            trace.reasoning_strategy = "pedagogical_breakdown"
+        else:
+            trace.reasoning_strategy = "step_by_step"
+
+        # 3. Get Template Steps
+        steps = self.decompose(category, is_challenge=is_challenge)
+        
+        return trace, steps
+
 
 # ---------------------------------------------------------------------------
-# Step 3 — Prompt Augmenter
+# Stage 4 — Prompt Augmenter
 # ---------------------------------------------------------------------------
 
 class PromptAugmenter:
     """
-    Injects a structured reasoning prefix into the raw context prompt.
-    The model is instructed to follow the internal reasoning chain
-    before generating its visible reply.
+    Injects a structured reasoning prefix and Stage 3 planning into the messages.
     """
 
     def augment_messages(
         self,
         messages: list[dict[str, str]],
-        intent_summary: str,
-        reasoning_steps: list[str],
+        trace: ReasoningTrace,
     ) -> list[dict[str, str]]:
         """
         Injects a structured reasoning prefix into the system message.
         """
-        steps_text = "\n".join(
-            f"  {i+1}. {step}" for i, step in enumerate(reasoning_steps)
-        )
-        reasoning_guidance = (
-            f"\n\n[Reasoning Context]\n"
-            f"Goal: {intent_summary}\n"
-            f"Strategy: {', '.join(reasoning_steps)}\n"
+        planning_block = (
+            f"\n\n[INTERNAL PLANNING]\n"
+            f"Intent: {trace.intent_category}\n"
+            f"Strategy: {trace.reasoning_strategy}\n"
+            f"Mode: {trace.response_mode}\n"
+            f"Depth: {trace.response_depth}\n"
+            f"Required Structure: {trace.output_structure}\n"
+            f"Reasoning Steps:\n" + "\n".join(f"  - {s}" for s in trace.steps) +
+            f"\n\n[INSTRUCTION]\n"
+            f"You MUST first perform hidden internal reasoning inside <thought> tags. "
+            f"Analyze the problem, break it into subproblems, verify logical consistency, "
+            f"and then provide your final polished response OUTSIDE the tags."
         )
         
         # Copy to avoid mutation
         new_messages = [m.copy() for m in messages]
         if new_messages and new_messages[0]["role"] == "system":
-            new_messages[0]["content"] += reasoning_guidance
+            new_messages[0]["content"] += planning_block
             
         return new_messages
 
 
 # ---------------------------------------------------------------------------
-# Step 4 — Response Validator
+# Stage 5 — Response Validator (Self-Evaluation)
 # ---------------------------------------------------------------------------
 
-@dataclass
-class ValidationResult:
-    passed: bool
-    issues: list[str]
-    score:  float        # 0.0 – 1.0
-
-
-class ResponseValidator:
-    """
-    Lightweight rule-based validator.  Flags responses that are:
-      - Too short (likely incomplete)
-      - Contain role-leakage tokens (user:/assistant:/system:)
-      - Highly repetitive (hallucination proxy)
-      - Contain profanity or offensive language stubs
-      - Missing punctuation entirely
-    """
-
-    MIN_WORDS = 8
-
-    def validate(self, response: str, intent_category: str) -> ValidationResult:
-        issues: list[str] = []
-        score = 1.0
-        words = response.split()
-
-        if intent_category != "greeting" and len(words) < self.MIN_WORDS:
-            issues.append(f"Response too short ({len(words)} words, min {self.MIN_WORDS}).")
-            score -= 0.35
-
-        if re.search(r'\b(user:|assistant:|system:)\b', response, re.IGNORECASE):
-            issues.append("Role-leakage tokens detected (user:/assistant:/system:).")
-            score -= 0.30
-
-        unique_ratio = len(set(words)) / max(len(words), 1)
-        if unique_ratio < 0.35:
-            issues.append(f"High repetition detected (unique-word ratio: {unique_ratio:.2f}).")
-            score -= 0.25
-
-        if not re.search(r'[.!?]', response):
-            issues.append("No sentence-ending punctuation found.")
-            score -= 0.10
-
-        # For coding intent: penalise if no code block found or if incomplete
-        if "coding" in intent_category or intent_category == "coding":
-            if "```" not in response:
-                issues.append("Coding response missing code block (```).")
-                score -= 0.15
-            else:
-                if response.count("```") % 2 != 0:
-                    issues.append("Markdown code block is not properly closed.")
-                    score -= 0.40
-                if response.count("{") != response.count("}"):
-                    issues.append("Unclosed braces detected in code.")
-                    score -= 0.30
-
-        score = round(max(0.0, min(1.0, score)), 4)
-        return ValidationResult(passed=score >= 0.55, issues=issues, score=score)
+# Obsolete ResponseValidator removed in favor of ResponseValidationEngine
 
 
 # ---------------------------------------------------------------------------
-# Step 5 — Response Rewriter / Refiner
+# Stage 6 — Response Refiner
 # ---------------------------------------------------------------------------
 
 class ResponseRewriter:
     """
-    Post-processes the model's raw draft to improve:
-      - Tone     : remove curt or cold phrasing
-      - Clarity  : strip role-leakage artefacts
-      - Structure: enforce sentence capitalisation & spacing
+    Improves clarity, conciseness, readability, and technical precision.
+    Automatically repairs detected issues from Stage 5.
     """
 
-    # Curt openers that signal an impersonal tone
-    _CURT_OPENERS = [
-        (r'^(The answer is:?)', "Here's the answer:"),
-        (r'^(No\.?\s)', "I'm sorry, but no. "),
-        (r'^(Yes\.?\s)', "Yes — "),
-        (r'^(I don\'t know\.?)', "I'm not entirely sure, but I can try to help."),
-        (r'^(Okay\.?\s)', "Sure — "),
-    ]
-
-    # Rule 4: Robotic phrases explicitly banned by the behavioral prompt
     _ROBOTIC_PHRASES = [
         (r'As an AI(?: assistant|language model)?[,.]?\s*', ''),
         (r'I would be delighted to[,.]?\s*', ''),
-        (r'How may I assist your[^?]*\??\s*', ''),
         (r'Certainly(?:! Here are several options\.\.\.|[,!])\s*', ''),
         (r'Based on your query[,.]?\s*', ''),
         (r'Of course[,!]\s*', ''),
         (r'Absolutely[,!]\s*', ''),
         (r'Great question[,!]\s*', ''),
-        (r'(?i)Here is the code:?\s*', ''),
-        (r'(?i)Let\'s understand .*? first\s*', ''),
     ]
 
-    # Role-leak artefacts to strip
-    _LEAK_PATTERNS = [
-        r'\buser:\s*', r'\bassistant:\s*', r'\bsystem:\s*',
-    ]
-
-    def rewrite(self, response: str, intent_category: str, issues: list[str]) -> str:
-        if not issues:
-            # Still run basic cleanup even when no issues flagged
-            return self._basic_cleanup(response)
-
+    def rewrite(self, response: str, trace: ReasoningTrace, issues: list[str]) -> str:
         result = response.strip()
 
-        # --- Rule 4: Strip robotic phrases (always applied) ---
+        # 1. Technical Precision: Strip robotic intros
         for pattern, replacement in self._ROBOTIC_PHRASES:
             result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
 
-        # --- Strip role leakage ---
-        for pattern in self._LEAK_PATTERNS:
-            result = re.sub(pattern, '', result, flags=re.IGNORECASE)
+        # 2. Repair Structural Issues
+        if "Incomplete markdown code block" in " ".join(issues):
+            if result.count("```") % 2 != 0:
+                result += "\n```"
+        
+        # 3. Tone & Clarity Refinement
+        if trace.response_depth == "beginner":
+            # Potentially simplify (in a real scenario, this might involve another LLM pass,
+            # but here we apply rule-based cleanup)
+            pass
+        elif trace.response_depth == "advanced":
+            # Ensure technical precision
+            pass
 
-        # --- Fix curt openers ---
-        for pattern, replacement in self._CURT_OPENERS:
-            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE, count=1)
-
-        # --- Capitalise first letter ---
-        if result and not result[0].isupper():
-            result = result[0].upper() + result[1:]
-
-        # --- Ensure trailing punctuation ---
-        if result and result[-1] not in '.!?':
-            result += '.'
-
-        # --- Add empathetic header for complaints ---
-        if intent_category == "complaint" and not result.lower().startswith("i understand"):
-            result = "I understand this isn't working as expected — let's fix it. " + result
-
-        # --- Normalize excess whitespace ---
+        # 4. Cleanup
         result = re.sub(r'\n{3,}', '\n\n', result)
         result = re.sub(r' {2,}', ' ', result)
+        
+        if result and not result[0].isupper() and trace.response_mode != "locked_solver":
+            result = result[0].upper() + result[1:]
 
         return result.strip()
 
     def _basic_cleanup(self, response: str) -> str:
         result = response.strip()
-        # Rule 4: Always strip robotic phrases even in passing responses
         for pattern, replacement in self._ROBOTIC_PHRASES:
             result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
         result = re.sub(r'\n{3,}', '\n\n', result)
         result = re.sub(r' {2,}', ' ', result)
-        if result and not result[0].isupper():
-            result = result[0].upper() + result[1:]
         return result
 
 
@@ -429,12 +331,20 @@ class ReasoningPipeline:
         final_response, trace = pipeline.refine(user_message, draft_response)
     """
 
-    def __init__(self, refinement_threshold: float = 0.55):
+    def __init__(self, refinement_threshold: float = 0.60):
         self.classifier    = IntentClassifier()
-        self.decomposer    = ProblemDecomposer()
+        self.planner       = InternalPlanner()
         self.augmenter     = PromptAugmenter()
-        self.validator     = ResponseValidator()
         self.rewriter      = ResponseRewriter()
+        from backend.response_ranker import ResponseRanker
+        from backend.dsa_expert import DSAExpert, ExecutionTracer
+        from backend.hallucination_guard import HallucinationGuard
+        from backend.validation_engine import ResponseValidationEngine
+        self.ranker        = ResponseRanker()
+        self.dsa_expert    = DSAExpert()
+        self.tracer        = ExecutionTracer()
+        self.guard         = HallucinationGuard()
+        self.validator     = ResponseValidationEngine()
         self.threshold     = refinement_threshold
         self._last_trace: Optional[ReasoningTrace] = None
 
@@ -442,77 +352,69 @@ class ReasoningPipeline:
 
     def prepare_messages(self, user_message: str, messages: list[dict[str, str]]) -> tuple[list[dict[str, str]], ReasoningTrace]:
         """
-        Augments the message list with internal reasoning instructions.
+        Orchestrates Stages 1-4.
         Returns (augmented_messages, trace).
         """
         t0 = time.perf_counter()
-        trace = ReasoningTrace()
 
+        # Stage 1: Intent Classification
         intent_summary, category = self.classifier.classify(user_message)
-        trace.intent          = intent_summary
-        trace.intent_category = category
-
-        if category in ["coding", "debugging"]:
-            from coding_intent import CodingIntentClassifier
+        
+        is_challenge = False
+        coding_sub_intent = ""
+        if category in ["coding_problem", "debugging"]:
+            from backend.coding_intent import CodingIntentClassifier
             coding_classifier = CodingIntentClassifier()
             coding_intent = coding_classifier.classify(user_message)
             if coding_intent.is_coding:
-                trace.coding_sub_intent = coding_intent.sub_intent
-                trace.is_coding_challenge = coding_intent.is_coding_challenge
-                if coding_intent.is_coding_challenge:
-                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Lock into CODE SOLVER MODE. strictly follow MANDATORY RESPONSE FORMAT: Approach -> Code -> Time Complexity -> Space Complexity."
-                else:
-                    trace.intent = f"User is making a coding request ({coding_intent.sub_intent})."
+                coding_sub_intent = coding_intent.sub_intent
+                is_challenge = coding_intent.is_coding_challenge
 
-        steps = self.decomposer.decompose(category, trace.coding_sub_intent, trace.is_coding_challenge)
+        # Stage 3: Internal Planning
+        trace, steps = self.planner.plan(user_message, category, is_challenge)
+        trace.intent = intent_summary
+        trace.coding_sub_intent = coding_sub_intent
+        
+        # SPECIALIZATION: DSA Pattern Detection
+        if category == "coding_problem":
+            pattern = self.dsa_expert.detect_pattern(user_message)
+            if pattern:
+                trace.reasoning_strategy = f"dsa_pattern:{pattern.name.lower().replace(' ', '_')}"
+                edge_cases = self.dsa_expert.analyze_edge_cases(pattern)
+                optimization = self.dsa_expert.get_optimization_strategy(pattern)
+                
+                steps.insert(1, f"Pattern Detected: {pattern.name}")
+                steps.append(f"Edge Cases to Handle: {', '.join(edge_cases[:3])}")
+                steps.append(f"Optimization Target: {optimization}")
+                steps.append("Simulation: Perform a mental symbolic trace with sample input to verify logic.")
+                logger.info("[ReasoningPipeline] DSA Pattern Detected: %s", pattern.name)
+
         trace.steps = steps
 
-        augmented = self.augmenter.augment_messages(messages, trace.intent, steps)
+        # Stage 4: Prompt Augmentation
+        augmented = self.augmenter.augment_messages(messages, trace)
 
         trace.latency_ms = round((time.perf_counter() - t0) * 1000, 2)
         self._last_trace = trace
 
-        logger.debug(
-            "[ReasoningPipeline] Intent=%s | Category=%s | Steps=%d | Latency=%.1fms",
-            intent_summary, category, len(steps), trace.latency_ms
+        logger.info(
+            "[ReasoningPipeline] Intent=%s | Depth=%s | Mode=%s | Latency=%.1fms",
+            category, trace.response_depth, trace.response_mode, trace.latency_ms
         )
         return augmented, trace
 
     def prepare_prompt(self, user_message: str, raw_context: str) -> tuple[str, ReasoningTrace]:
         """
-        Legacy method: Augments the context prompt with an internal reasoning prefix.
-        Returns (augmented_prompt, trace).
+        Legacy method updated to use the new planning logic.
         """
-        t0 = time.perf_counter()
-        trace = ReasoningTrace()
-
-        intent_summary, category = self.classifier.classify(user_message)
-        trace.intent          = intent_summary
-        trace.intent_category = category
-
-        if category in ["coding", "debugging"]:
-            from coding_intent import CodingIntentClassifier
-            coding_classifier = CodingIntentClassifier()
-            coding_intent = coding_classifier.classify(user_message)
-            if coding_intent.is_coding:
-                trace.coding_sub_intent = coding_intent.sub_intent
-                trace.is_coding_challenge = coding_intent.is_coding_challenge
-                if coding_intent.is_coding_challenge:
-                    trace.intent = "User wants a direct, complete code solution for a coding challenge. Lock into CODE SOLVER MODE. strictly follow MANDATORY RESPONSE FORMAT: Approach -> Code -> Time Complexity -> Space Complexity."
-                else:
-                    trace.intent = f"User is making a coding request ({coding_intent.sub_intent})."
-
-        steps = self.decomposer.decompose(category, trace.coding_sub_intent, trace.is_coding_challenge)
-        trace.steps = steps
-
-        # Use dummy string logic for legacy
-        steps_text = "\n".join(f"  {i+1}. {step}" for i, step in enumerate(steps))
-        augmented = f"[REASONING]\n{steps_text}\n\n{raw_context}"
-
-        trace.latency_ms = round((time.perf_counter() - t0) * 1000, 2)
-        self._last_trace = trace
-
-        return augmented, trace
+        messages = [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": user_message}]
+        augmented_messages, trace = self.prepare_messages(user_message, messages)
+        
+        # Extract the planning block from the augmented system message
+        planning_block = augmented_messages[0]["content"].split("[INTERNAL PLANNING]")[1]
+        augmented_prompt = f"[REASONING]\n[INTERNAL PLANNING]{planning_block}\n\n{raw_context}"
+        
+        return augmented_prompt, trace
 
     # ---- Phase B: Post-inference ------------------------------------------
 
@@ -521,25 +423,60 @@ class ReasoningPipeline:
         user_message: str,
         draft_response: str,
         trace: Optional[ReasoningTrace] = None,
+        candidates: Optional[list[str]] = None,
+        context: str = "",
+        allow_regeneration: bool = True
     ) -> tuple[str, ReasoningTrace]:
         """
-        Validates and optionally rewrites the draft response.
-        Returns (final_response, updated_trace).
+        Orchestrates Stage 5 (Evaluation) and Stage 6 (Refinement).
+        Uses the Self-Correction Engine for automated repairs.
         """
         if trace is None:
             trace = self._last_trace or ReasoningTrace()
 
         t0 = time.perf_counter()
 
-        validation = self.validator.validate(draft_response, trace.intent_category)
-        trace.draft_issues = validation.issues
+        # Step 5a: Ranking (if multiple candidates exist)
+        if candidates and len(candidates) > 1:
+            draft_response = self.ranker.rank(candidates, user_message, context, trace.steps)
 
-        if not validation.passed:
-            final = self.rewriter.rewrite(draft_response, trace.intent_category, validation.issues)
+        # Step 5b: Advanced Validation Diagnostic
+        report = self.validator.validate(
+            draft_response, 
+            context=context, 
+            expected_mode=trace.response_mode
+        )
+        trace.draft_issues = [i.message for i in report.issues]
+
+        # Step 5c: Hallucination Guard (Grounded Verification)
+        # Still using HallucinationGuard for deep context checking
+        h_report = self.guard.evaluate(draft_response, context)
+        if not h_report.is_grounded or h_report.confidence_score < 0.5:
+            logger.warning("[ReasoningPipeline] Low confidence detected: %.3f", h_report.confidence_score)
+            draft_response = self.guard.handle_uncertainty(draft_response, h_report)
+            trace.draft_issues.extend(h_report.contradictions)
+
+        # Step 5d: Check for Regeneration Necessity
+        if report.needs_regeneration and allow_regeneration:
+            logger.warning("[ReasoningPipeline] Critical issues detected. Triggering regeneration/refinement.")
             trace.refinement_applied = True
-            logger.debug(
-                "[ReasoningPipeline] Refinement applied | Issues=%s | Score=%.3f",
-                validation.issues, validation.score
+            # In a real system, we might call an LLM here to REGENERATE.
+            # For now, we signal it in the trace.
+        
+        # Step 5e: Extract Hidden Reasoning
+        internal_reasoning, clean_response = self.extract_final_answer(draft_response)
+        if internal_reasoning:
+            logger.info("[ReasoningPipeline] Extracted internal reasoning (%d chars)", len(internal_reasoning))
+            draft_response = clean_response
+
+        # Step 6: Final Refinement & Repair
+        if not report.is_valid:
+            final = self.validator.repair(draft_response, report)
+            final = self.rewriter.rewrite(final, trace, [i.message for i in report.issues])
+            trace.refinement_applied = True
+            logger.info(
+                "[ReasoningPipeline] Advanced repair applied | Issues=%d",
+                len(report.issues)
             )
         else:
             final = self.rewriter._basic_cleanup(draft_response)
@@ -550,3 +487,25 @@ class ReasoningPipeline:
 
     def get_last_trace(self) -> Optional[ReasoningTrace]:
         return self._last_trace
+
+    @staticmethod
+    def extract_final_answer(response: str) -> tuple[str, str]:
+        """
+        Splits the response into (internal_reasoning, final_answer).
+        The reasoning is assumed to be inside <thought> tags.
+        """
+        thought_match = re.search(r"<thought>(.*?)</thought>", response, re.DOTALL | re.IGNORECASE)
+        if thought_match:
+            reasoning = thought_match.group(1).strip()
+            final_answer = response.replace(thought_match.group(0), "").strip()
+            return reasoning, final_answer
+        
+        # Fallback if tags are missing or malformed
+        if "<thought>" in response.lower():
+            parts = re.split(r"</thought>", response, flags=re.IGNORECASE)
+            if len(parts) > 1:
+                reasoning = parts[0].replace("<thought>", "").strip()
+                final_answer = parts[1].strip()
+                return reasoning, final_answer
+                
+        return "", response.strip()

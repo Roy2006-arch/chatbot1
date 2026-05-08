@@ -111,13 +111,17 @@ CREATE TABLE IF NOT EXISTS failed_queries (
     source          TEXT    NOT NULL DEFAULT 'auto', -- 'auto' | 'user'
     resolved        INTEGER NOT NULL DEFAULT 0,      -- 1 once retrained
     preferred_response TEXT NOT NULL DEFAULT '',     -- annotator fills this
-    timestamp_utc   TEXT    NOT NULL
+    occurrence_count   INTEGER NOT NULL DEFAULT 1,   -- track repeated mistakes
+    embedding          BLOB,                         -- prompt embedding for similarity
+    timestamp_utc      TEXT    NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_failed_resolved
     ON failed_queries(resolved);
 CREATE INDEX IF NOT EXISTS idx_failed_source
     ON failed_queries(source);
+CREATE INDEX IF NOT EXISTS idx_failed_occurrence
+    ON failed_queries(occurrence_count);
 
 
 -- ── retrain_runs ────────────────────────────────────────────────────────────

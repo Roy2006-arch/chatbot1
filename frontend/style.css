@@ -104,7 +104,7 @@ body {
     padding: 24px 0;
     display: flex;
     flex-direction: column;
-    scroll-behavior: smooth;
+    scroll-behavior: auto; /* Changed to auto to prevent jitter during high-speed token updates */
 }
 
 .message {
@@ -326,3 +326,61 @@ textarea::placeholder {
     border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+/* Streaming & Markdown Optimizations */
+.markdown-block {
+    margin-bottom: 16px;
+}
+
+.markdown-block:last-child {
+    margin-bottom: 0;
+}
+
+.markdown-block p {
+    margin-bottom: 8px;
+}
+
+.markdown-block p:last-child {
+    margin-bottom: 0;
+}
+
+.streaming-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1.1em;
+    background-color: var(--avatar-ai-bg);
+    margin-left: 2px;
+    vertical-align: middle;
+    animation: cursor-blink 1.2s infinite;
+    position: relative;
+    top: 2px;
+}
+
+@keyframes cursor-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+.continuity-note {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    background: var(--user-bg);
+    border-left: 3px solid var(--avatar-ai-bg);
+    padding: 10px 16px;
+    margin: 12px 0;
+    border-radius: 6px;
+    animation: slideUpFade 0.5s ease forwards;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    display: inline-block;
+}
+
+@keyframes slideUpFade {
+    from { 
+        opacity: 0; 
+        transform: translateY(10px); 
+    }
+    to { 
+        opacity: 1; 
+        transform: translateY(0); 
+    }
+}
