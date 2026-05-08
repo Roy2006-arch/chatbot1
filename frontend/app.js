@@ -58,15 +58,21 @@ const sessionId = Math.random().toString(36).substring(7);
 
 // --- Realtime Utility Engine: detect and register user timezone ---
 const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-(async () => {
-    try {
-        await fetch(`${BACKEND_URL}/realtime/timezone`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: sessionId, timezone: userTimezone })
-        });
-    } catch (e) {
-        console.warn('Could not register timezone:', e);
+(async function registerTimezone(retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            await fetch(`${BACKEND_URL}/realtime/timezone`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId, timezone: userTimezone })
+            });
+            return;
+        } catch (e) {
+            console.warn(`Timezone registration attempt ${i + 1}/${retries} failed:`, e);
+            if (i < retries - 1) {
+                await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+            }
+        }
     }
 })();
 
@@ -311,7 +317,7 @@ async function sendMessage() {
                 const response = await fetch(`${BACKEND_URL}/chat/stream`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: text, session_id: sessionId, is_continuation: isContinuation })
+                    body: JSON.stringify({ message: text, session_id: sessionId, is_continuation: isContinuation, timezone: userTimezone })
                 });
             
                 const reader = response.body.getReader();

@@ -240,6 +240,7 @@ class ChatRequest(BaseModel):
     session_id: str
     conv_id: str = ""
     is_continuation: bool = False
+    timezone: str = ""
 
     @validator("session_id")
     def validate_session_id(cls, v):
@@ -327,6 +328,10 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 
     conv_id = request.get_or_create_conv_id()
     turn_start = time.time()
+
+    # Register timezone from request if provided (supports per-request timezone override)
+    if request.timezone:
+        realtime_handler.set_user_timezone(request.session_id, request.timezone)
 
     # Fast-path realtime check - highest priority, no LLM needed
     if not request.is_continuation:

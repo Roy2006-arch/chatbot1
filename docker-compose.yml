@@ -12,4 +12,5 @@ services:
       - ./backend:/app/backend
     environment:
       - PYTHONUNBUFFERED=1
+      - TZ=Asia/Kolkata
     restart: unless-stopped

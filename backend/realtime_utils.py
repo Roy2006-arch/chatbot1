@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Optional
+
+logger = logging.getLogger("realtime_utils")
 
 try:
     from zoneinfo import ZoneInfo
@@ -114,13 +117,19 @@ def _resolve_tz(tz_name: str | None = None) -> tzinfo:
     mapped = TIMEZONE_ALIASES.get(normalized, tz_name)
     if _HAS_ZONEINFO:
         try:
-            return ZoneInfo(mapped)
-        except (KeyError, TypeError):
+            tz = ZoneInfo(mapped)
+            return tz
+        except (KeyError, TypeError, Exception):
             pass
     try:
-        offset = int(mapped.replace("utc", "").replace("gmt", "").replace("+", "").strip() or "0")
+        cleaned = mapped.replace("utc", "").replace("gmt", "").replace("+", "").strip()
+        if cleaned:
+            offset = int(cleaned)
+        else:
+            offset = 0
         return timezone(timedelta(hours=offset))
     except (ValueError, AttributeError):
+        logger.warning("Could not resolve timezone '%s' (mapped='%s'), falling back to UTC", tz_name, mapped)
         return timezone.utc
 
 
@@ -255,6 +264,17 @@ class RealtimeHandler:
     def get_user_timezone(self, session_id: str) -> Optional[str]:
         return self._user_timezones.get(session_id)
 
+    def _get_resolved_label(self, tz: tzinfo | None, tz_name: str | None) -> str:
+        if tz is None:
+            return "UTC"
+        tz_str = str(tz)
+        is_utc = tz_str.upper().startswith("UTC")
+        if tz_name and not is_utc:
+            return tz_name
+        if is_utc:
+            return f"UTC{tz_str[3:]}" if len(tz_str) > 3 else "UTC"
+        return tz_str
+
     def handle(self, message: str, session_id: str = "") -> Optional[str]:
         intent, params = self.detector.detect(message)
         if not intent:
@@ -263,13 +283,13 @@ class RealtimeHandler:
         tz_name = params.get("timezone") or self._user_timezones.get(session_id)
         tz = _resolve_tz(tz_name) if tz_name else None
         fmt = params.get("format", FORMAT_12H)
-        time_label = tz_name or "your timezone" if tz_name else "UTC"
+        resolved_label = self._get_resolved_label(tz, tz_name)
 
         if intent == "current_time":
-            return self._format_time_response(tz, fmt, time_label, tz_name)
+            return self._format_time_response(tz, fmt, resolved_label, tz_name)
 
         if intent == "current_date":
-            return self._format_date_response(tz, tz_name)
+            return self._format_date_response(tz, tz_name, resolved_label)
 
         if intent == "current_day":
             day = get_current_day(tz)
@@ -280,7 +300,7 @@ class RealtimeHandler:
         if intent == "current_year_month":
             year = get_current_year(tz)
             _, month_name = get_current_month(tz)
-            if tz_name:
+            if tz_name and str(tz) not in ("UTC", "UTC+00:00"):
                 return f"It's {month_name} {year} in {tz_name}."
             return f"It's {month_name} {year}."
 
@@ -290,7 +310,7 @@ class RealtimeHandler:
             return f"Current timestamp is **{unix}** (Unix epoch). In ISO 8601: **{iso}**."
 
         if intent == "time_in_location":
-            return self._format_time_response(tz, fmt, tz_name or "that location", tz_name)
+            return self._format_time_response(tz, fmt, resolved_label, tz_name)
 
         if intent == "timezone_conversion":
             return self._format_conversion_response(params)
@@ -312,10 +332,11 @@ class RealtimeHandler:
             return f"It's **{t}** on **{d}** ({tz_name})."
         return f"It's **{t}** on **{d}** ({label})."
 
-    def _format_date_response(self, tz: tzinfo | None, tz_name: str | None) -> str:
+    def _format_date_response(self, tz: tzinfo | None, tz_name: str | None, resolved_label: str = "") -> str:
         d = get_current_date(tz)
-        if tz_name:
-            return f"Today's date is **{d}** ({tz_name})."
+        label = resolved_label or tz_name or ""
+        if label:
+            return f"Today's date is **{d}** ({label})."
         return f"Today's date is **{d}**."
 
     def _format_conversion_response(self, params: dict) -> str:
@@ -334,10 +355,11 @@ class RealtimeHandler:
         tz_name = self._user_timezones.get(session_id)
         tz = _resolve_tz(tz_name) if tz_name else timezone.utc
         now = datetime.now(tz)
+        resolved_label = str(tz) if hasattr(tz, '__str__') else str(tz)
         return (
             f"[REALTIME CONTEXT]\n"
             f"Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}\n"
-            f"Timezone: {tz_name or 'UTC'}\n"
+            f"Timezone: {resolved_label}\n"
             f"Unix timestamp: {int(now.timestamp())}\n"
             f"[END REALTIME CONTEXT]\n"
             f"- Use the REALTIME CONTEXT above for ANY time/date questions.\n"
