@@ -293,15 +293,15 @@ class RealtimeHandler:
 
         if intent == "current_day":
             day = get_current_day(tz)
-            if tz_name:
-                return f"It's {day} in {tz_name}."
+            if resolved_label and resolved_label != "UTC":
+                return f"It's {day} in {resolved_label}."
             return f"Today is {day}."
 
         if intent == "current_year_month":
             year = get_current_year(tz)
             _, month_name = get_current_month(tz)
-            if tz_name and str(tz) not in ("UTC", "UTC+00:00"):
-                return f"It's {month_name} {year} in {tz_name}."
+            if resolved_label and resolved_label != "UTC":
+                return f"It's {month_name} {year} in {resolved_label}."
             return f"It's {month_name} {year}."
 
         if intent == "timestamp":
@@ -326,11 +326,9 @@ class RealtimeHandler:
     def _format_time_response(self, tz: tzinfo | None, fmt: int, label: str, tz_name: str | None) -> str:
         t = get_current_time(tz, fmt)
         d = get_current_date(tz)
-        if tz_name and tz_name != label:
-            return f"It's **{t}** on **{d}** in {tz_name}."
-        if tz_name:
-            return f"It's **{t}** on **{d}** ({tz_name})."
-        return f"It's **{t}** on **{d}** ({label})."
+        if label:
+            return f"It's **{t}** on **{d}** ({label})."
+        return f"It's **{t}** on **{d}**."
 
     def _format_date_response(self, tz: tzinfo | None, tz_name: str | None, resolved_label: str = "") -> str:
         d = get_current_date(tz)
