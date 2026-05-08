@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import hashlib
 import json
 import logging
 import os
@@ -7,6 +8,7 @@ import re
 import sys
 import time
 import uuid
+from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import asynccontextmanager
 
@@ -149,6 +151,76 @@ INTENTS_REQUIRING_RAG = [
 MAX_STREAM_SECONDS = 180
 MAX_AUTORETRY = 1
 MAX_CONTINUATION_NEW_TOKENS = 4096
+
+GREETING_RESPONSES = OrderedDict([
+    ("hello", "Hello! How can I help you today?"),
+    ("hi", "Hi there! How can I assist you?"),
+    ("hey", "Hey! What can I do for you?"),
+    ("good morning", "Good morning! How can I help you?"),
+    ("good evening", "Good evening! How can I assist you?"),
+    ("how are you", "I'm doing well, thanks for asking! How can I help you?"),
+    ("what's your name", "I'm a chatbot assistant here to help with your questions."),
+    ("who are you", "I'm a chatbot assistant. How can I help you?"),
+    ("who made you", "I was created to assist with questions and tasks."),
+    ("thanks", "You're welcome! Let me know if you need anything else."),
+    ("thank you", "You're welcome! Let me know if you need anything else."),
+])
+
+class SimpleResponseCache:
+    def __init__(self, maxsize=256, ttl=300):
+        self._cache = {}
+        self._maxsize = maxsize
+        self._ttl = ttl
+
+    def get(self, message: str, session_id: str):
+        key = self._make_key(message, session_id)
+        entry = self._cache.get(key)
+        if entry and (time.time() - entry["time"] < self._ttl):
+            return entry["response"]
+        if entry:
+            del self._cache[key]
+        return None
+
+    def set(self, message: str, session_id: str, response: str):
+        key = self._make_key(message, session_id)
+        if len(self._cache) >= self._maxsize:
+            oldest = min(self._cache, key=lambda k: self._cache[k]["time"])
+            del self._cache[oldest]
+        self._cache[key] = {"response": response, "time": time.time()}
+
+    def _make_key(self, message: str, session_id: str) -> str:
+        normalized = message.lower().strip()
+        return f"{session_id}:{hashlib.md5(normalized.encode()).hexdigest()}"
+
+response_cache = SimpleResponseCache()
+
+def _get_greeting_response(message: str):
+    normalized = message.lower().strip().rstrip("?!.")
+    for greeting, response in GREETING_RESPONSES.items():
+        if normalized == greeting:
+            return response
+    return None
+
+def _is_simple_query(category: str, message: str) -> bool:
+    if category == "casual_chat":
+        return True
+    if category == "general" and len(message.split()) <= 8:
+        return True
+    return False
+
+def _get_token_budget(category: str, message: str) -> int:
+    budgets = {
+        "casual_chat": 64,
+        "general": 128,
+        "document_query": 256,
+        "explanation": 1024,
+        "architecture": 2048,
+        "optimization": 2048,
+        "debugging": 2048,
+        "coding_problem": 4096,
+    }
+    return budgets.get(category, 2048)
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -301,6 +373,57 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         if not request.is_continuation:
             logger.info("[RAG] Bypassed RAG for category: %s", category)
 
+    is_simple = _is_simple_query(category, request.message)
+
+    if not request.is_continuation:
+        greeting_response = _get_greeting_response(request.message)
+        if greeting_response:
+            logger.info("[FastPath] Greeting for session=%s", request.session_id)
+            await asyncio.to_thread(
+                memory_manager.add_message, request.session_id, "assistant", greeting_response
+            )
+            await asyncio.to_thread(
+                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
+                role="assistant", content=greeting_response, model_name=MODEL_NAME,
+                prompt=request.message, ttft_seconds=0.0,
+                total_time_seconds=time.time() - turn_start,
+            )
+            orchestrator.reset_session(request.session_id)
+            cache = get_request_cache()
+            if cache:
+                cache.clear()
+            set_request_cache(None)
+
+            async def greeting_stream():
+                yield f"data: {json.dumps({'content': greeting_response, 'conv_id': conv_id})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(greeting_stream(), media_type="text/event-stream")
+
+        cached_response = response_cache.get(request.message, request.session_id)
+        if cached_response:
+            logger.info("[FastPath] Cache hit for session=%s", request.session_id)
+            await asyncio.to_thread(
+                memory_manager.add_message, request.session_id, "assistant", cached_response
+            )
+            await asyncio.to_thread(
+                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
+                role="assistant", content=cached_response, model_name=MODEL_NAME,
+                prompt=request.message, ttft_seconds=0.0,
+                total_time_seconds=time.time() - turn_start,
+            )
+            orchestrator.reset_session(request.session_id)
+            cache = get_request_cache()
+            if cache:
+                cache.clear()
+            set_request_cache(None)
+
+            async def cached_stream():
+                yield f"data: {json.dumps({'content': cached_response, 'conv_id': conv_id})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(cached_stream(), media_type="text/event-stream")
+
     logger.info(
         "[ReasoningPipeline] session=%s intent=%s steps=%d",
         request.session_id, getattr(reasoning_trace, "intent_category", "unknown"),
@@ -317,7 +440,12 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         continuity_manager=orchestrator,
     )
 
-    max_new_tokens = 8192 if not request.is_continuation else MAX_CONTINUATION_NEW_TOKENS
+    if request.is_continuation:
+        max_new_tokens = MAX_CONTINUATION_NEW_TOKENS
+    elif is_simple:
+        max_new_tokens = _get_token_budget(category, request.message)
+    else:
+        max_new_tokens = 8192
     num_candidates = 2 if category == "coding_problem" and not request.is_continuation else 1
 
     stop_tokens = [tokenizer.eos_token] if tokenizer.eos_token is not None else []
@@ -432,7 +560,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         all_candidates = [draft_text.strip()] + (secondary_candidates or [])
         rag_ctx = rag_result.context_block if rag_result and rag_result.context_block else ""
 
-        if draft_text.strip():
+        if draft_text.strip() and not is_simple:
             final_response, reasoning_trace_updated = await _run_cpu_bound(
                 reasoning_pipeline.refine,
                 request.message,
@@ -448,6 +576,9 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         if getattr(reasoning_trace_updated, "refinement_applied", False):
             if final_response.strip() != draft_text.strip():
                 yield f"data: {json.dumps({'content': '', 'refined': True, 'full': final_response, 'conv_id': conv_id})}\n\n"
+
+        if is_simple and final_response.strip():
+            response_cache.set(request.message, request.session_id, final_response)
 
         await asyncio.to_thread(
             memory_manager.add_message, request.session_id, "assistant", final_response
@@ -468,65 +599,68 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             total_time_seconds=total_elapsed,
         )
 
-        validation = orchestrator.validate_and_finalize(request.session_id)
-        if not validation["is_valid"] and validation["repair_suffix"]:
-            yield f"data: {json.dumps({'content': validation['repair_suffix'], 'repaired': True, 'conv_id': conv_id})}\n\n"
-
         retry_count = 0
-        while (
-            orchestrator.get_current_state(request.session_id) == ResponseLifecycle.RECOVERY
-            and retry_count < MAX_AUTORETRY
-        ):
-            retry_count += 1
-            logger.info(
-                "[AutoContinuation] Retry %d/%d for %s",
-                retry_count, MAX_AUTORETRY, request_id,
-            )
-
-            recovery_prompt = orchestrator.get_recovery_prompt(request.session_id)
-            continuation_messages = augmented_messages + [
-                {"role": "user", "content": recovery_prompt}
-            ]
-            formatted_prompt_cont = _format_prompt(tokenizer, continuation_messages, MODE)
-
-            stream_manager.reset()
-            cont_kwargs = generation_kwargs.copy()
-            cont_kwargs["max_new_tokens"] = MAX_CONTINUATION_NEW_TOKENS
-
-            async def generate_continuation():
-                try:
-                    async for token in inference_manager.generate_stream(
-                        prompt=formatted_prompt_cont,
-                        request_id=f"{request_id}_cont_{retry_count}",
-                        sampling_kwargs=cont_kwargs,
-                    ):
-                        await stream_manager.put(token)
-                except asyncio.CancelledError:
-                    pass
-                except Exception as e:
-                    logger.error("Continuation error: %s", e)
-                finally:
-                    await stream_manager.finalize()
-
-            cont_task = asyncio.create_task(generate_continuation())
-            try:
-                async for event in stream_manager.event_generator():
-                    if "content" in event:
-                        try:
-                            data = json.loads(event.replace("data: ", "", 1))
-                            content = data.get("content", "")
-                            if content:
-                                draft_text += content
-                        except (json.JSONDecodeError, IndexError):
-                            pass
-                    yield event
-            except asyncio.TimeoutError:
-                logger.error("Continuation stream timed out for %s", request_id)
-            await cont_task
-
+        if is_simple:
+            orchestrator.transition(request.session_id, ResponseLifecycle.FINALIZED)
+        else:
             validation = orchestrator.validate_and_finalize(request.session_id)
             if not validation["is_valid"] and validation["repair_suffix"]:
                 yield f"data: {json.dumps({'content': validation['repair_suffix'], 'repaired': True, 'conv_id': conv_id})}\n\n"
+
+            while (
+                orchestrator.get_current_state(request.session_id) == ResponseLifecycle.RECOVERY
+                and retry_count < MAX_AUTORETRY
+            ):
+                retry_count += 1
+                logger.info(
+                    "[AutoContinuation] Retry %d/%d for %s",
+                    retry_count, MAX_AUTORETRY, request_id,
+                )
+
+                recovery_prompt = orchestrator.get_recovery_prompt(request.session_id)
+                continuation_messages = augmented_messages + [
+                    {"role": "user", "content": recovery_prompt}
+                ]
+                formatted_prompt_cont = _format_prompt(tokenizer, continuation_messages, MODE)
+
+                stream_manager.reset()
+                cont_kwargs = generation_kwargs.copy()
+                cont_kwargs["max_new_tokens"] = MAX_CONTINUATION_NEW_TOKENS
+
+                async def generate_continuation():
+                    try:
+                        async for token in inference_manager.generate_stream(
+                            prompt=formatted_prompt_cont,
+                            request_id=f"{request_id}_cont_{retry_count}",
+                            sampling_kwargs=cont_kwargs,
+                        ):
+                            await stream_manager.put(token)
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as e:
+                        logger.error("Continuation error: %s", e)
+                    finally:
+                        await stream_manager.finalize()
+
+                cont_task = asyncio.create_task(generate_continuation())
+                try:
+                    async for event in stream_manager.event_generator():
+                        if "content" in event:
+                            try:
+                                data = json.loads(event.replace("data: ", "", 1))
+                                content = data.get("content", "")
+                                if content:
+                                    draft_text += content
+                            except (json.JSONDecodeError, IndexError):
+                                pass
+                        yield event
+                except asyncio.TimeoutError:
+                    logger.error("Continuation stream timed out for %s", request_id)
+                await cont_task
+
+                validation = orchestrator.validate_and_finalize(request.session_id)
+                if not validation["is_valid"] and validation["repair_suffix"]:
+                    yield f"data: {json.dumps({'content': validation['repair_suffix'], 'repaired': True, 'conv_id': conv_id})}\n\n"
 
         if orchestrator.get_current_state(request.session_id) == ResponseLifecycle.FINALIZED:
             orchestrator.reset_session(request.session_id)
