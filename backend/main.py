@@ -153,17 +153,17 @@ MAX_AUTORETRY = 1
 MAX_CONTINUATION_NEW_TOKENS = 4096
 
 GREETING_RESPONSES = OrderedDict([
-    ("hello", "Hello! How can I help you today?"),
-    ("hi", "Hi there! How can I assist you?"),
+    ("hello", "Hello! How can I help?"),
+    ("hi", "Hi there! How can I help?"),
     ("hey", "Hey! What can I do for you?"),
-    ("good morning", "Good morning! How can I help you?"),
-    ("good evening", "Good evening! How can I assist you?"),
-    ("how are you", "I'm doing well, thanks for asking! How can I help you?"),
+    ("good morning", "Good morning! How can I help?"),
+    ("good evening", "Good evening! How can I assist?"),
+    ("how are you", "I'm doing well, thanks! How can I help?"),
     ("what's your name", "I'm a chatbot assistant here to help with your questions."),
-    ("who are you", "I'm a chatbot assistant. How can I help you?"),
+    ("who are you", "I'm a chatbot assistant. How can I help?"),
     ("who made you", "I was created to assist with questions and tasks."),
-    ("thanks", "You're welcome! Let me know if you need anything else."),
-    ("thank you", "You're welcome! Let me know if you need anything else."),
+    ("thanks", "You're welcome! Happy to help."),
+    ("thank you", "You're welcome! Happy to help."),
 ])
 
 class SimpleResponseCache:
@@ -195,9 +195,21 @@ class SimpleResponseCache:
 response_cache = SimpleResponseCache()
 
 def _get_greeting_response(message: str):
-    normalized = message.lower().strip().rstrip("?!.")
+    normalized = message.lower().strip().rstrip("?!.,;:")
+    # Exact match first (handles "hi", "hello!", etc.)
     for greeting, response in GREETING_RESPONSES.items():
         if normalized == greeting:
+            return response
+    # Extract first alphabetic word (handles "hi there", "hello world", "hi, how are you")
+    match = re.match(r'[^a-z]*([a-z]+)', normalized)
+    first_word = match.group(1) if match else ""
+    single_word = {k: v for k, v in GREETING_RESPONSES.items() if " " not in k}
+    if first_word in single_word:
+        return single_word[first_word]
+    # Multi-word greetings (check longest first to avoid partial matches)
+    multi_word = {k: v for k, v in GREETING_RESPONSES.items() if " " in k}
+    for greeting, response in sorted(multi_word.items(), key=lambda x: -len(x[0])):
+        if normalized.startswith(greeting):
             return response
     return None
 
