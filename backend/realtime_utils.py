@@ -19,10 +19,19 @@ TIMEZONE_ALIASES: dict[str, str] = {
     "ist": "Asia/Kolkata",
     "pst": "America/Los_Angeles",
     "pdt": "America/Los_Angeles",
+    "pt": "America/Los_Angeles",
     "cst": "America/Chicago",
+    "cdt": "America/Chicago",
+    "ct": "America/Chicago",
     "est": "America/New_York",
     "edt": "America/New_York",
+    "et": "America/New_York",
     "mst": "America/Denver",
+    "mdt": "America/Denver",
+    "mt": "America/Denver",
+    "akst": "America/Anchorage",
+    "akdt": "America/Anchorage",
+    "hst": "Pacific/Honolulu",
     "utc": "UTC",
     "gmt": "UTC",
     "bst": "Europe/London",
@@ -43,18 +52,23 @@ TIMEZONE_ALIASES: dict[str, str] = {
 }
 
 TIMEZONE_PATTERNS: list[tuple[str, str]] = [
-    (r"\b(what time is it|current time|tell me the time|what's the time|time now)\b", "current_time"),
-    (r"\b(today'?s date|what'?s the date|current date|date today|what is the date)\b", "current_date"),
-    (r"\b(what day is it|what day is today|current day|today'?s day)\b", "current_day"),
+    (r"\b(current date and time|date and time right now|date and time now|current date & time|what is the current date and time)\b", "current_datetime"),
+    (r"\b(what time is it|current time|tell me the time|what'?s the time|time now|what is the time|do you know the time|give me the time)\b", "current_time"),
+    (r"\b(today'?s date|what'?s the date|current date|date today|what is the date|give me the date|do you know the date)\b", "current_date"),
+    (r"\b(what day is it|what day is today|current day|today'?s day|do you know what day it is)\b", "current_day"),
     (r"\b(current (year|month)|what (year|month) is it|this (year|month))\b", "current_year_month"),
     (r"\b(timestamp|unix timestamp|epoch time|current timestamp)\b", "timestamp"),
     (r"\btime in\b", "time_in_location"),
+    (r"\bdate in\b", "time_in_location"),
     (r"\bconvert\b.*\bto\b", "timezone_conversion"),
     (r"\bconvert.*(timezone|time|utc|gmt)\b", "timezone_conversion"),
     (r"\b(timezone|time zone|tz)\b", "timezone_info"),
+    (r"\b\d{1,2}:\d{2}\s*(am|pm)\b", "timezone_conversion"),
+    (r"\b(what'?s the|tell me the|give me the|do you know the)\s+(date|time|day|year|month)\b", "current_time"),
 ]
 
 LOCATION_TZ_MAP: dict[str, str] = {
+    "pacific": "America/Los_Angeles",
     "tokyo": "Asia/Tokyo",
     "japan": "Asia/Tokyo",
     "london": "Europe/London",
@@ -62,11 +76,14 @@ LOCATION_TZ_MAP: dict[str, str] = {
     "england": "Europe/London",
     "new york": "America/New_York",
     "nyc": "America/New_York",
+    "eastern": "America/New_York",
     "chicago": "America/Chicago",
+    "central": "America/Chicago",
     "los angeles": "America/Los_Angeles",
     "la": "America/Los_Angeles",
     "san francisco": "America/Los_Angeles",
     "denver": "America/Denver",
+    "mountain": "America/Denver",
     "shanghai": "Asia/Shanghai",
     "beijing": "Asia/Shanghai",
     "china": "Asia/Shanghai",
@@ -291,6 +308,9 @@ class RealtimeHandler:
         if intent == "current_date":
             return self._format_date_response(tz, tz_name, resolved_label)
 
+        if intent == "current_datetime":
+            return self._format_time_response(tz, fmt, resolved_label, tz_name)
+
         if intent == "current_day":
             day = get_current_day(tz)
             if resolved_label and resolved_label != "UTC":
@@ -331,11 +351,12 @@ class RealtimeHandler:
         return f"It's **{t}** on **{d}**."
 
     def _format_date_response(self, tz: tzinfo | None, tz_name: str | None, resolved_label: str = "") -> str:
+        t = get_current_time(tz)
         d = get_current_date(tz)
         label = resolved_label or tz_name or ""
         if label:
-            return f"Today's date is **{d}** ({label})."
-        return f"Today's date is **{d}**."
+            return f"Today's date is **{d}**, **{t}** ({label})."
+        return f"Today's date is **{d}**, **{t}**."
 
     def _format_conversion_response(self, params: dict) -> str:
         source_tz = params.get("source_tz", "UTC")
