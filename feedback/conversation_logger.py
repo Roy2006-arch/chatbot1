@@ -83,7 +83,6 @@ def log_turn(
         composite = result.get("composite_score")
         grade     = result.get("grade", "F")
 
-        from .db_schema import _CONN  # noqa: F401 – import after init
         BAD_THRESHOLD = 0.55
         if composite is not None and composite < BAD_THRESHOLD:
             is_bad = 1

@@ -1,2 +1,55 @@
 # Local Netlify folder
 .netlify
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+data/feedback/*.db*
+data/feedback/*.db-shm
+data/feedback/*.db-wal
+
+# Vector index
+*.faiss
+data/knowledge_base/index.faiss
+data/knowledge_base/metadata.json
+data/knowledge_base/manifest.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+evaluation/logs/*.jsonl
+evaluation/logs/*.json
+
+# Training checkpoints
+training/checkpoint_*/
+training/*.bin
+training/*.safetensors

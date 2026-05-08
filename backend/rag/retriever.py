@@ -6,9 +6,10 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
 import numpy as np
-from sentence_transformers import SentenceTransformer, CrossEncoder
+from sentence_transformers import SentenceTransformer
 
 from .knowledge_base import KnowledgeBase, SearchResult
+from backend.shared_resources import get_request_cache
 
 logger = logging.getLogger("rag.retriever")
 
@@ -16,7 +17,11 @@ logger = logging.getLogger("rag.retriever")
 # Constants & Models
 # ---------------------------------------------------------------------------
 _CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-_HAS_CROSS_ENCODER = True # Assume available since we're in a high-perf environment
+try:
+    from sentence_transformers import CrossEncoder
+    _HAS_CROSS_ENCODER = True
+except ImportError:
+    _HAS_CROSS_ENCODER = False
 
 # ---------------------------------------------------------------------------
 # Data Structures
@@ -73,8 +78,15 @@ class RAGRetriever:
         
         self._embedder        = knowledge_base._embedder
         self._reranker        = None # Lazy load
-        
-        # Long-term Learning: Mistake Memory
+        self._cache           = None # Lazy resolve per-request embedding cache
+
+    def _cached_encode(self, texts, **kwargs):
+        cache = get_request_cache()
+        if cache is not None:
+            return cache.encode(self._embedder, texts, **kwargs)
+        return self._embedder.encode(texts, **kwargs)
+
+    # Long-term Learning: Mistake Memory
         self.mistake_memory   = MistakeMemory()
         
     def _get_reranker(self):
@@ -106,7 +118,7 @@ class RAGRetriever:
 
         # Use the bi-encoder to get embeddings for MMR comparison
         cand_texts = [c.text for c in candidates]
-        cand_vecs = self._embedder.encode(cand_texts, show_progress_bar=False)
+        cand_vecs = self._cached_encode(cand_texts, show_progress_bar=False)
         cand_vecs = np.array(cand_vecs, dtype="float32")
         # L2-normalize
         norms = np.linalg.norm(cand_vecs, axis=1, keepdims=True) + 1e-9
@@ -201,7 +213,7 @@ class RAGRetriever:
         # Stage 4: MMR Diversification
         used_mmr = False
         if self.use_mmr and len(candidates) > self.top_n:
-            query_vec = self._embedder.encode([query], show_progress_bar=False)[0]
+            query_vec = self._cached_encode([query], show_progress_bar=False)[0]
             candidates = self._mmr(query_vec, candidates, self.top_n, self.mmr_lambda)
             used_mmr = True
         else:
