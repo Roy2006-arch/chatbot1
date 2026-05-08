@@ -31,6 +31,7 @@ from backend.context_manager import ContextManager
 from backend.lifecycle_manager import MemoryLifecycleManager
 from backend.response_middleware import ReasoningAuditMiddleware
 from backend.shared_resources import set_request_cache, get_request_cache, RequestEmbeddingCache
+from backend.realtime_utils import realtime_handler
 from feedback import init_db, log_turn, new_conv_id, router as feedback_router
 
 logging.basicConfig(level=logging.INFO)
@@ -292,6 +293,16 @@ async def rag_stats():
     return knowledge_base.stats()
 
 
+@app.post("/realtime/timezone")
+async def set_user_timezone(request: Request):
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    tz_name = body.get("timezone", "UTC")
+    if session_id:
+        realtime_handler.set_user_timezone(session_id, tz_name)
+    return {"status": "ok", "timezone": tz_name}
+
+
 @app.post("/rag/ingest")
 async def rag_ingest(file: UploadFile = File(...)):
     contents = await file.read()
@@ -316,6 +327,35 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 
     conv_id = request.get_or_create_conv_id()
     turn_start = time.time()
+
+    # Fast-path realtime check - highest priority, no LLM needed
+    if not request.is_continuation:
+        realtime_response = realtime_handler.handle(request.message, request.session_id)
+        if realtime_response:
+            logger.info("[FastPath] Realtime response for session=%s", request.session_id)
+            await asyncio.to_thread(
+                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=0,
+                role="user", content=request.message, model_name=MODEL_NAME,
+            )
+            await asyncio.to_thread(
+                memory_manager.add_message, request.session_id, "user", request.message
+            )
+            await asyncio.to_thread(
+                memory_manager.add_message, request.session_id, "assistant", realtime_response
+            )
+            await asyncio.to_thread(
+                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
+                role="assistant", content=realtime_response, model_name=MODEL_NAME,
+                prompt=request.message, ttft_seconds=0.0,
+                total_time_seconds=time.time() - turn_start,
+            )
+            orchestrator.reset_session(request.session_id)
+
+            async def realtime_stream():
+                yield f"data: {json.dumps({'content': realtime_response, 'conv_id': conv_id})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(realtime_stream(), media_type="text/event-stream")
 
     # Fast-path greeting check - run before any expensive processing
     if not request.is_continuation:
@@ -395,6 +435,16 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 
     category = getattr(reasoning_trace, "intent_category", "general")
     rag_result = None
+
+    # Inject realtime context into ALL system messages (prevents hallucination of time/date)
+    if augmented_messages and augmented_messages[0]["role"] == "system":
+        system_content = augmented_messages[0]["content"]
+        realtime_block = realtime_handler.get_realtime_context_block(request.session_id)
+        system_content = system_content.replace(
+            "[INTERNAL PLANNING]",
+            f"[REALTIME DATA]\n{realtime_block}\n\n[INTERNAL PLANNING]",
+        )
+        augmented_messages[0]["content"] = system_content
 
     if not request.is_continuation and category in INTENTS_REQUIRING_RAG:
         rag_result = await asyncio.to_thread(retriever.retrieve, request.message)

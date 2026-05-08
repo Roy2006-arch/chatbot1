@@ -56,6 +56,20 @@ const BACKEND_URL = window.location.hostname === 'localhost' || window.location.
 
 const sessionId = Math.random().toString(36).substring(7);
 
+// --- Realtime Utility Engine: detect and register user timezone ---
+const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+(async () => {
+    try {
+        await fetch(`${BACKEND_URL}/realtime/timezone`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId, timezone: userTimezone })
+        });
+    } catch (e) {
+        console.warn('Could not register timezone:', e);
+    }
+})();
+
 // --- Theme Toggle Logic ---
 // Check local storage or system preference
 const savedTheme = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');

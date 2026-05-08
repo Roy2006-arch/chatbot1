@@ -40,6 +40,7 @@ class IntentClassifier:
         (r"\b(explain|how does|what is|define|clarify|elaborate|walk me through)\b", "explanation"),
         (r"\b(solve|implement|write code|code for|function|class|program|challenge|problem)\b", "coding_problem"),
         (r"\b(document|pdf|file|read this|search in|find in document)\b", "document_query"),
+        (r"\b(what time is it|current time|today'?s date|what'?s the date|current date|what day is|time in |timestamp)\b", "realtime_query"),
     ]
 
     def classify(self, message: str) -> tuple[str, str]:
