@@ -32,6 +32,7 @@ from backend.lifecycle_manager import MemoryLifecycleManager
 from backend.response_middleware import ReasoningAuditMiddleware
 from backend.shared_resources import set_request_cache, get_request_cache, RequestEmbeddingCache
 from backend.realtime_utils import realtime_handler
+from backend.url_verifier import URLVerifier
 from feedback import init_db, log_turn, new_conv_id, router as feedback_router
 
 logging.basicConfig(level=logging.INFO)
@@ -133,6 +134,7 @@ retriever = RAGRetriever(
 )
 
 reasoning_pipeline = ReasoningPipeline(refinement_threshold=0.55)
+url_verifier = URLVerifier()
 orchestrator = UnifiedOrchestrator()
 
 lifecycle_manager = MemoryLifecycleManager(
@@ -644,6 +646,18 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         else:
             final_response = draft_text.strip()
             reasoning_trace_updated = reasoning_trace
+
+        if url_verifier.has_any_urls(final_response):
+            url_report = await url_verifier.verify_response(final_response)
+            if not url_report.all_verified or url_report.has_fake_urls:
+                logger.warning(
+                    "[URLVerifier] %d unverifiable URLs in response for session=%s",
+                    len([u for u in url_report.urls if u.confidence < url_verifier.confidence_threshold]),
+                    request.session_id,
+                )
+                for r in url_report.urls:
+                    if r.is_valid_format and r.confidence < url_verifier.confidence_threshold:
+                        logger.warning("[URLVerifier] Low-confidence URL: %s (conf=%.2f)", r.url, r.confidence)
 
         if getattr(reasoning_trace_updated, "refinement_applied", False):
             if final_response.strip() != draft_text.strip():

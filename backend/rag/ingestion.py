@@ -23,7 +23,7 @@ Usage:
 
     chunks = pipeline.ingest_file("docs/manual.pdf")
     chunks = pipeline.ingest_text("raw text...", source="inline_faq")
-    chunks = pipeline.ingest_url("https://example.com/docs")
+    chunks = pipeline.ingest_url("https://example.org/docs")  # replace with real URL
     chunks = pipeline.ingest_directory("docs/")        # batch
 """
 

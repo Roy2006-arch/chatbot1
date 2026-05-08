@@ -11,8 +11,8 @@ Examples:
     # Ingest an entire directory
     python -m rag.ingest_cli --dir data/knowledge/
 
-    # Ingest a web page
-    python -m rag.ingest_cli --url https://example.com/faq
+    # Ingest a web page (replace with a real URL)
+    python -m rag.ingest_cli --url https://example.org/faq
 
     # Ingest inline text
     python -m rag.ingest_cli --text "Our return policy is 30 days." --source "return_policy"

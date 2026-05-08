@@ -10,6 +10,7 @@ from backend.response_ranker import ResponseRanker
 from backend.dsa_expert import DSAExpert, ExecutionTracer
 from backend.hallucination_guard import HallucinationGuard
 from backend.validation_engine import ResponseValidationEngine
+from backend.url_verifier import URLVerifier, ResponseURLReport
 
 logger = logging.getLogger("reasoning_pipeline")
 logger.setLevel(logging.DEBUG)
@@ -232,6 +233,7 @@ class ReasoningPipeline:
         self.tracer = ExecutionTracer()
         self.guard = HallucinationGuard()
         self.validator = ResponseValidationEngine()
+        self.url_verifier = URLVerifier()
         self.threshold = refinement_threshold
         self._last_trace: Optional[ReasoningTrace] = None
 
@@ -307,6 +309,9 @@ class ReasoningPipeline:
         if candidates and len(candidates) > 1:
             draft_response = self.ranker.rank(candidates, user_message, context, trace.steps)
 
+        if self.url_verifier.has_any_urls(draft_response):
+            trace.steps.append("URL verification: checking links in response")
+
         report = self.validator.validate(
             draft_response,
             context=context,
@@ -319,6 +324,9 @@ class ReasoningPipeline:
             logger.warning("[ReasoningPipeline] Low confidence: %.3f", h_report.confidence_score)
             draft_response = self.guard.handle_uncertainty(draft_response, h_report, trace.intent_category)
             trace.draft_issues.extend(h_report.contradictions)
+        if h_report.url_issues:
+            trace.draft_issues.extend(h_report.url_issues)
+            logger.warning("[ReasoningPipeline] URL issues: %s", h_report.url_issues)
 
         if report.needs_regeneration and allow_regeneration:
             logger.warning("[ReasoningPipeline] Critical issues — regeneration signaled.")
@@ -328,6 +336,14 @@ class ReasoningPipeline:
         if internal_reasoning:
             logger.info("[ReasoningPipeline] Extracted reasoning (%d chars)", len(internal_reasoning))
             draft_response = clean_response
+
+        if self.url_verifier.has_any_urls(draft_response):
+            if h_report.url_issues:
+                cleaned, url_warnings = self.url_verifier.sanitize_response(draft_response, ResponseURLReport(urls=[]))
+                for w in url_warnings:
+                    trace.draft_issues.append(w)
+                draft_response = cleaned
+                trace.refinement_applied = True
 
         if not report.is_valid:
             final = self.validator.repair(draft_response, report)

@@ -4,6 +4,8 @@ import logging
 from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass, field
 
+from backend.url_verifier import URLVerifier
+
 logger = logging.getLogger("validation_engine")
 
 
@@ -32,8 +34,8 @@ class ResponseValidationEngine:
             "O(n)": r"\bO\(n\)\b",
             "O(n log n)": r"\bO\(n\s*log\s*n\)\b",
             "O(n^2)": r"\bO\(n\^2\)\b",
-            "O(2^n)": r"\bO\(2\^n\)\b",
         }
+        self.url_verifier = URLVerifier()
 
     def validate(self, text: str, context: str = "", expected_mode: str = "normal") -> ValidationReport:
         issues = []
@@ -53,6 +55,9 @@ class ResponseValidationEngine:
 
         content_issues = self._validate_content(repaired_text, context)
         issues.extend(content_issues)
+
+        url_issues = self._validate_urls(repaired_text)
+        issues.extend(url_issues)
 
         needs_regeneration = any(issue.severity == 'critical' for issue in issues) or \
             any(issue.code == 'unfinished_reasoning' for issue in issues)
@@ -288,6 +293,23 @@ class ResponseValidationEngine:
                 message="Robotic AI disclaimer detected.",
                 severity="info",
             ))
+
+        return issues
+
+    def _validate_urls(self, text: str) -> List[ValidationIssue]:
+        issues = []
+        urls = self.url_verifier.extract_urls(text)
+        if not urls:
+            return issues
+
+        for url in urls:
+            if not self.url_verifier.validate_format(url):
+                issues.append(ValidationIssue(
+                    code="invalid_url_format",
+                    message=f"Invalid URL format detected: {url}",
+                    severity="warning",
+                    suggested_repair=f"Wrap {url} in backticks or remove it.",
+                ))
 
         return issues
 
