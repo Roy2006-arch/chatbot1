@@ -55,51 +55,30 @@ class StreamManager:
 
     def _suppress_thought_tags(self, token: str) -> list[str]:
         self._buffer_for_thought += token
-        output_parts = []
-
-        while self._buffer_for_thought:
-            lower = self._buffer_for_thought.lower()
-
-            if not self._in_thought:
-                thought_start = lower.find("<thought>")
-                if thought_start != -1:
-                    pre = self._buffer_for_thought[:thought_start]
-                    if pre:
-                        output_parts.append(pre)
-                    self._buffer_for_thought = self._buffer_for_thought[thought_start + 9:]
-                    self._in_thought = True
-                    self._thought_content = ""
-                else:
-                    gt_pos = lower.find(">")
-                    lt_pos = lower.find("<", 1) if len(lower) > 1 else -1
-
-                    if lt_pos != -1:
-                        block = self._buffer_for_thought[:lt_pos]
-                        if "<" not in block.lower():
-                            output_parts.append(block)
-                            self._buffer_for_thought = self._buffer_for_thought[lt_pos:]
-                        else:
-                            output_parts.append(self._buffer_for_thought)
-                            self._buffer_for_thought = ""
-                    elif len(self._buffer_for_thought) > 50:
-                        output_parts.append(self._buffer_for_thought)
-                        self._buffer_for_thought = ""
-                    else:
-                        break
+        if not self._in_thought:
+            parts = self._buffer_for_thought.split("<thought>")
+            if len(parts) > 1:
+                output = [parts[0]] if parts[0] else []
+                self._buffer_for_thought = "<thought>".join(parts[1:])
+                self._in_thought = True
+                self._thought_content = ""
+                return output
             else:
-                end_tag = "</thought>"
-                end_pos = self._buffer_for_thought.lower().find(end_tag)
-                if end_pos != -1:
-                    self._thought_content += self._buffer_for_thought[:end_pos]
-                    self._buffer_for_thought = self._buffer_for_thought[end_pos + len(end_tag):]
-                    self._in_thought = False
-                    self._thought_content = ""
-                else:
-                    self._thought_content += self._buffer_for_thought
-                    self._buffer_for_thought = ""
-                    break
-
-        return output_parts
+                cutoff = max(0, len(self._buffer_for_thought) - 8)
+                safe, self._buffer_for_thought = self._buffer_for_thought[:cutoff], self._buffer_for_thought[cutoff:]
+                return [safe] if safe else []
+        else:
+            end_idx = self._buffer_for_thought.find("</thought>")
+            if end_idx != -1:
+                self._thought_content += self._buffer_for_thought[:end_idx]
+                self._buffer_for_thought = self._buffer_for_thought[end_idx + 10:]
+                self._in_thought = False
+                self._thought_content = ""
+                return self._suppress_thought_tags("")
+            else:
+                self._thought_content += self._buffer_for_thought
+                self._buffer_for_thought = ""
+                return []
 
     async def _yield_safe(self, text: str) -> AsyncGenerator[str, None]:
         stop_tokens = ["<|user|>", "<|assistant|>", "<|system|>", "\nuser:", "\nassistant:"]

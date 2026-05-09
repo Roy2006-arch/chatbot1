@@ -167,9 +167,9 @@ INTENTS_REQUIRING_RAG = [
     "coding_problem", "debugging", "explanation",
     "architecture", "optimization", "document_query", "general",
 ]
-MAX_STREAM_SECONDS = 180
-MAX_AUTORETRY = 1
-MAX_CONTINUATION_NEW_TOKENS = 4096
+MAX_STREAM_SECONDS = 60
+MAX_AUTORETRY = 0
+MAX_CONTINUATION_NEW_TOKENS = 1024
 
 GREETING_RESPONSES = OrderedDict([
     ("hello", "Hi! How may I help you?"),
@@ -186,7 +186,7 @@ GREETING_RESPONSES = OrderedDict([
 ])
 
 class SimpleResponseCache:
-    def __init__(self, maxsize=256, ttl=300):
+    def __init__(self, maxsize=512, ttl=600):
         self._cache = OrderedDict()
         self._maxsize = maxsize
         self._ttl = ttl
@@ -233,24 +233,24 @@ def _get_greeting_response(message: str):
     return None
 
 def _is_simple_query(category: str, message: str) -> bool:
-    if category == "casual_chat":
+    if category in ("casual_chat", "general"):
         return True
-    if category == "general" and len(message.split()) <= 8:
+    if category in ("explanation", "document_query") and len(message.split()) <= 10:
         return True
     return False
 
 def _get_token_budget(category: str, message: str) -> int:
     budgets = {
-        "casual_chat": 64,
-        "general": 128,
-        "document_query": 256,
-        "explanation": 1024,
-        "architecture": 2048,
-        "optimization": 2048,
-        "debugging": 2048,
-        "coding_problem": 4096,
+        "casual_chat": 100,
+        "general": 200,
+        "document_query": 512,
+        "explanation": 512,
+        "architecture": 1024,
+        "optimization": 1024,
+        "debugging": 1024,
+        "coding_problem": 2048,
     }
-    return budgets.get(category, 2048)
+    return budgets.get(category, 1024)
 
 
 class ChatRequest(BaseModel):
@@ -293,8 +293,11 @@ def _format_prompt(tokenizer, messages, mode: str) -> str:
 
 
 async def _run_cpu_bound(fn, *args, **kwargs):
+    from functools import partial
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(get_cpu_pool(), fn, *args, **kwargs)
+    if kwargs:
+        return await loop.run_in_executor(get_cpu_pool(), partial(fn, *args, **kwargs))
+    return await loop.run_in_executor(get_cpu_pool(), fn, *args)
 
 
 @app.get("/context/stats/{session_id}")
@@ -534,6 +537,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         orchestrator.transition(request.session_id, ResponseLifecycle.GENERATION)
 
     category = getattr(reasoning_trace, "intent_category", "general")
+    is_simple = _is_simple_query(category, request.message)
     rag_result = None
 
     # Inject realtime context into ALL system messages (prevents hallucination of time/date)
@@ -548,14 +552,14 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 
     # MistakeMemory corrections (single call, shared with RAG context)
     corrections_block = None
-    if not request.is_continuation and augmented_messages and augmented_messages[0]["role"] == "system":
+    if not request.is_continuation and not is_simple and augmented_messages and augmented_messages[0]["role"] == "system":
         try:
             mm = MistakeMemory()
             corrections_block = await asyncio.to_thread(mm.format_corrections_for_prompt, request.message)
         except Exception as e:
             logger.warning("[MistakeMemory] Injection error: %s", e)
 
-    if not request.is_continuation and category in INTENTS_REQUIRING_RAG:
+    if not request.is_continuation and not is_simple and category in INTENTS_REQUIRING_RAG:
         rag_task = asyncio.to_thread(retriever.retrieve, request.message)
         doc_task = asyncio.to_thread(
             doc_processor.query_documents, request.session_id, request.message
@@ -575,8 +579,6 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     else:
         if not request.is_continuation:
             logger.info("[RAG] Bypassed RAG for category: %s", category)
-
-    is_simple = _is_simple_query(category, request.message)
 
     logger.info(
         "[ReasoningPipeline] session=%s intent=%s steps=%d",
@@ -599,8 +601,8 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     elif is_simple:
         max_new_tokens = _get_token_budget(category, request.message)
     else:
-        max_new_tokens = 8192
-    num_candidates = 2 if category == "coding_problem" and not request.is_continuation else 1
+        max_new_tokens = 2048
+    num_candidates = 1
 
     stop_tokens = [tokenizer.eos_token] if tokenizer.eos_token is not None else []
     generation_kwargs = dict(
@@ -711,7 +713,8 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         all_candidates = [draft_text.strip()] + (secondary_candidates or [])
         rag_ctx = rag_result.context_block if rag_result and rag_result.context_block else ""
 
-        if draft_text.strip() and not is_simple:
+        needs_refine = draft_text.strip() and not is_simple and category in ("coding_problem", "debugging", "architecture", "optimization")
+        if needs_refine:
             final_response, reasoning_trace_updated = await _run_cpu_bound(
                 reasoning_pipeline.refine,
                 request.message,
@@ -724,7 +727,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             final_response = draft_text.strip()
             reasoning_trace_updated = reasoning_trace
 
-        if url_verifier.has_any_urls(final_response):
+        if not is_simple and url_verifier.has_any_urls(final_response):
             url_report = await url_verifier.verify_response(final_response)
             if not url_report.all_verified or url_report.has_fake_urls:
                 logger.warning(
@@ -732,15 +735,12 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                     len([u for u in url_report.urls if u.confidence < url_verifier.confidence_threshold]),
                     request.session_id,
                 )
-                for r in url_report.urls:
-                    if r.is_valid_format and r.confidence < url_verifier.confidence_threshold:
-                        logger.warning("[URLVerifier] Low-confidence URL: %s (conf=%.2f)", r.url, r.confidence)
 
         if getattr(reasoning_trace_updated, "refinement_applied", False):
             if final_response.strip() != draft_text.strip():
                 yield f"data: {json.dumps({'content': '', 'refined': True, 'full': final_response, 'conv_id': conv_id})}\n\n"
 
-        if is_simple and final_response.strip():
+        if final_response.strip():
             response_cache.set(request.message, request.session_id, final_response)
 
         await asyncio.to_thread(
