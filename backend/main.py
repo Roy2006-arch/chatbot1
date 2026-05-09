@@ -31,6 +31,7 @@ from backend.context_manager import ContextManager
 from backend.lifecycle_manager import MemoryLifecycleManager
 from backend.response_middleware import ReasoningAuditMiddleware
 from backend.refinement_middleware import ResponseRefinementASGIMiddleware
+from backend.compression_middleware import StrictCompressionMiddleware
 from backend.shared_resources import set_request_cache, get_request_cache, RequestEmbeddingCache
 from backend.realtime_utils import realtime_handler
 from backend.url_verifier import URLVerifier
@@ -166,6 +167,7 @@ lifecycle_manager = MemoryLifecycleManager(
 
 app.add_middleware(ReasoningAuditMiddleware, pipeline=reasoning_pipeline)
 app.add_middleware(ResponseRefinementASGIMiddleware)
+app.add_middleware(StrictCompressionMiddleware)
 
 INTENTS_REQUIRING_RAG = [
     "coding_problem", "debugging", "explanation",

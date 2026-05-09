@@ -379,10 +379,10 @@ async function sendMessage() {
                                         tokenCount++;
                                     }
                                     
-                                    // If the backend sends a refined (final corrected) version, use that instead
-                                    if (parsed.refined && parsed.full) {
+                                    // If the backend sends a refined or compressed version, use that instead
+                                    if ((parsed.refined || parsed.compressed) && parsed.full) {
                                         fullResponse = parsed.full;
-                                        tokenQueue = []; // Clear queue since we have the full replaced text
+                                        tokenQueue = [];
                                         aiContent.innerHTML = renderMarkdownStream(fullResponse, false);
                                     }
                                 } catch (e) {
