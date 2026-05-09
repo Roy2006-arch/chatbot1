@@ -418,81 +418,41 @@ class ResponseRefinementASGIMiddleware:
             await self.app(scope, receive, send)
             return
 
-        body_chunks = []
-        response_started = False
-        response_status = 200
-        response_headers = []
-
         async def send_intercept(message: dict):
-            nonlocal response_started, response_status, response_headers
             if message["type"] == "http.response.start":
-                response_started = True
-                response_status = message["status"]
-                response_headers = message["headers"]
+                await send(message)
             elif message["type"] == "http.response.body":
-                body_chunks.append(message.get("body", b""))
-                if not message.get("more_body", False):
-                    refined_body = await self._process_body(body_chunks, scope)
-                    await send({
-                        "type": "http.response.start",
-                        "status": response_status,
-                        "headers": response_headers,
-                    })
+                chunk = message.get("body", b"")
+                more = message.get("more_body", False)
+                if more:
+                    await send(message)
+                else:
+                    modified = await self._refine_last_chunk(chunk)
                     await send({
                         "type": "http.response.body",
-                        "body": refined_body,
+                        "body": modified,
                         "more_body": False,
                     })
 
         await self.app(scope, receive, send_intercept)
 
-    async def _process_body(self, chunks: List[bytes], scope: dict) -> bytes:
-        raw = b"".join(chunks)
-        if not raw:
-            return raw
+    async def _refine_last_chunk(self, chunk: bytes) -> bytes:
+        if not chunk:
+            return chunk
 
         try:
-            body_str = raw.decode("utf-8")
+            body_str = chunk.decode("utf-8")
         except UnicodeDecodeError:
-            return raw
+            return chunk
 
-        # Extract user message from request body (first SSE data line)
-        user_message = self._extract_user_message(scope, body_str)
+        if not (b"data: " in chunk[:1024]):
+            return chunk
 
-        # Check if this is SSE
-        is_sse = any(
-            h[1] == b"text/event-stream"
-            for h in (await self._get_response_headers())
-        )
-
-        if is_sse:
-            return await self._refine_sse_stream(body_str, user_message)
-        else:
-            return await self._refine_json_body(body_str, user_message)
-
-    async def _get_response_headers(self):
-        return []
-
-    def _extract_user_message(self, scope: dict, body_str: str) -> str:
-        try:
-            for line in body_str.split("\n"):
-                if line.startswith("data: "):
-                    data = line[6:].strip()
-                    if data and data != "[DONE]":
-                        parsed = json.loads(data)
-                        if "content" in parsed:
-                            return parsed["content"]
-        except (json.JSONDecodeError, IndexError):
-            pass
-        return ""
-
-    async def _refine_sse_stream(self, body: str, user_message: str) -> bytes:
-        lines = body.split("\n")
         full_text = ""
-        done = False
         refined_already = False
+        done = False
 
-        for line in lines:
+        for line in body_str.split("\n"):
             if line.startswith("data: "):
                 data = line[6:].strip()
                 if data == "[DONE]":
@@ -508,28 +468,12 @@ class ResponseRefinementASGIMiddleware:
                         pass
 
         if done and full_text and not refined_already:
-            refined = self._refiner.refine_response(user_message, full_text)
+            refined = self._refiner.refine_response("", full_text)
             if refined != full_text and refined.strip():
-                refined_event = (
-                    f"data: {json.dumps({'content': '', 'refined': True, 'full': refined})}\n\n"
-                )
-                body += "\n" + refined_event
+                event = json.dumps({"content": "", "refined": True, "full": refined})
+                chunk += f"\ndata: {event}\n\n".encode("utf-8")
 
-        return body.encode("utf-8")
-
-    async def _refine_json_body(self, body: str, user_message: str) -> bytes:
-        try:
-            parsed = json.loads(body)
-            if isinstance(parsed, dict) and "response" in parsed:
-                original = parsed["response"]
-                refined = self._refiner.refine_response(user_message, original)
-                if refined != original:
-                    parsed["response"] = refined
-                    parsed["refined"] = True
-                    return json.dumps(parsed).encode("utf-8")
-        except (json.JSONDecodeError, TypeError):
-            pass
-        return body.encode("utf-8")
+        return chunk
 
 
 # ── Convenience function for scoring ──

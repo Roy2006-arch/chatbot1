@@ -372,12 +372,8 @@ class ResponseCompressor:
 class StrictCompressionMiddleware:
     """ASGI middleware that compresses LLM responses based on intent.
 
-    1. Intercepts request body to get user message
-    2. Intercepts response body to get full response text
-    3. Detects intent and enforces hard word limits
-    4. Removes filler, repetition, corporate wording, intros
-    5. Detects corporate bloat and forces strict truncation
-    6. Emits compressed version as SSE event
+    Streams tokens immediately for real-time display, then appends
+    a compressed event at the end if compression reduced length.
     """
 
     def __init__(self, app: Callable):
@@ -401,36 +397,21 @@ class StrictCompressionMiddleware:
                 if not msg.get("more_body", False):
                     raw = b"".join(request_body_chunks)
                     user_message = self._extract_message_from_request(raw)
-                    logger.debug(
-                        "[Compression] Extracted user message: %.80s", user_message
-                    )
             return msg
 
-        response_chunks = []
-        response_started = False
-        response_status = 200
-        response_headers = []
-
         async def send_intercept(message: dict):
-            nonlocal response_started, response_status, response_headers
             if message["type"] == "http.response.start":
-                response_started = True
-                response_status = message["status"]
-                response_headers = message["headers"]
+                await send(message)
             elif message["type"] == "http.response.body":
-                response_chunks.append(message.get("body", b""))
-                if not message.get("more_body", False):
-                    compressed = self._process_response(
-                        b"".join(response_chunks), user_message
-                    )
-                    await send({
-                        "type": "http.response.start",
-                        "status": response_status,
-                        "headers": response_headers,
-                    })
+                chunk = message.get("body", b"")
+                more = message.get("more_body", False)
+                if more:
+                    await send(message)
+                else:
+                    modified = self._process_last_chunk(chunk, user_message)
                     await send({
                         "type": "http.response.body",
-                        "body": compressed,
+                        "body": modified,
                         "more_body": False,
                     })
 
@@ -443,30 +424,24 @@ class StrictCompressionMiddleware:
         except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
             return ""
 
-    def _process_response(self, raw: bytes, user_message: str) -> bytes:
-        if not raw or not user_message:
-            if not user_message:
-                logger.warning("[Compression] No user message extracted, skipping")
-            return raw
+    def _process_last_chunk(self, chunk: bytes, user_message: str) -> bytes:
+        if not chunk or not user_message:
+            return chunk
 
         try:
-            body_str = raw.decode("utf-8")
+            body_str = chunk.decode("utf-8")
         except UnicodeDecodeError:
-            return raw
+            return chunk
 
-        is_sse = b"text/event-stream" in raw[:1024] or b"data: " in raw[:1024]
-        if is_sse:
-            return self._compress_sse(body_str, user_message)
-        return self._compress_json(body_str, user_message)
+        if not (b"data: " in chunk[:1024]):
+            return chunk
 
-    def _compress_sse(self, body: str, user_message: str) -> bytes:
-        lines = body.split("\n")
         full_text = ""
         refined_text = None
-        done = False
         compressed_already = False
+        done = False
 
-        for line in lines:
+        for line in body_str.split("\n"):
             if line.startswith("data: "):
                 data = line[6:].strip()
                 if data == "[DONE]":
@@ -486,42 +461,14 @@ class StrictCompressionMiddleware:
 
         if done and full_text and not compressed_already:
             target = refined_text if refined_text else full_text
-            original_wc = len(target.split())
             compressed = self.compressor.compress(target, user_message)
-            compressed_wc = len(compressed.split())
             if compressed != target and compressed.strip():
                 logger.info(
-                    "[Compression] %d→%d words for intent=%s | bloat=%.2f",
-                    original_wc, compressed_wc,
-                    self.compressor.detect_intent(user_message),
+                    "[Compression] %d→%d words | bloat=%.2f",
+                    len(target.split()), len(compressed.split()),
                     _corporate_bloat_score(target),
                 )
-                compressed_event = (
-                    f"data: {json.dumps({'content': '', 'compressed': True, 'full': compressed})}\n\n"
-                )
-                body += "\n" + compressed_event
-            else:
-                logger.debug(
-                    "[Compression] No change (%d words) for intent=%s",
-                    original_wc, self.compressor.detect_intent(user_message),
-                )
+                event = json.dumps({"content": "", "compressed": True, "full": compressed})
+                chunk += f"\ndata: {event}\n\n".encode("utf-8")
 
-        return body.encode("utf-8")
-
-    def _compress_json(self, body: str, user_message: str) -> bytes:
-        try:
-            parsed = json.loads(body)
-            if isinstance(parsed, dict) and "response" in parsed:
-                original = parsed["response"]
-                compressed = self.compressor.compress(original, user_message)
-                if compressed != original:
-                    parsed["response"] = compressed
-                    parsed["compressed"] = True
-                    logger.info(
-                        "[Compression] JSON: %d→%d words",
-                        len(original.split()), len(compressed.split()),
-                    )
-                    return json.dumps(parsed).encode("utf-8")
-        except (json.JSONDecodeError, TypeError):
-            pass
-        return body.encode("utf-8")
+        return chunk
