@@ -93,7 +93,15 @@ class StreamManager:
                 return []
 
     async def _yield_safe(self, text: str) -> AsyncGenerator[str, None]:
-        stop_tokens = ["<|user|>", "<|assistant|>", "<|system|>", "\nuser:", "\nassistant:"]
+        stop_tokens = [
+            "<|user|>", "<|assistant|>", "<|system|>",
+            "\nuser:", "\nassistant:", "\nsystem:",
+            "\n\nuser:", "\n\nassistant:", "\n\nsystem:",
+            "\nUser:", "\nAssistant:", "\nSystem:",
+            "\n\nUser:", "\n\nAssistant:", "\n\nSystem:",
+            "\nhuman:", "\nHuman:",
+            "\n\nhuman:", "\n\nHuman:",
+        ]
         for t in stop_tokens:
             if t in text:
                 text = text.split(t)[0]

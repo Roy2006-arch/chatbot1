@@ -280,7 +280,7 @@ class ResponseValidationEngine:
                     severity="warning",
                 ))
 
-        if re.search(r'\b(user:|assistant:|system:|<\|user\|>)\b', text, re.IGNORECASE):
+        if re.search(r'\b(user:|assistant:|system:|human:|<\|user\|>|<\|assistant\|>|<\|system\|>)\b', text, re.IGNORECASE):
             issues.append(ValidationIssue(
                 code="hallucination_leak",
                 message="Internal conversation tokens detected in response.",
@@ -327,7 +327,7 @@ class ResponseValidationEngine:
         for issue in report.issues:
             if issue.code == "hallucination_leak":
                 result = re.sub(
-                    r'\b(user:|assistant:|system:|<\|user\|>|<\|assistant\|>)\b.*',
+                    r'\b(user:|assistant:|system:|human:|<\|user\|>|<\|assistant\|>|<\|system\|>)\b.*',
                     '', result, flags=re.IGNORECASE,
                 )
 
