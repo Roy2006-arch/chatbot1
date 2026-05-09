@@ -174,22 +174,22 @@ MAX_AUTORETRY = 3
 MAX_CONTINUATION_NEW_TOKENS = 1024
 
 GREETING_RESPONSES = OrderedDict([
-    ("hello", "Hi! How may I help you?"),
-    ("hi", "Hi! How may I help you?"),
-    ("hey", "Hi! How may I help you?"),
-    ("good morning", "Good morning! How may I help you?"),
-    ("good evening", "Good evening! How may I assist you?"),
-    ("how are you", "I'm doing well! How may I help you?"),
-    ("how is the day", "It's a wonderful day! How may I help you?"),
-    ("how's the day", "It's a wonderful day! How may I help you?"),
-    ("how's your day", "I'm doing well! How may I help you?"),
-    ("how was your day", "I'm doing well! How may I help you?"),
-    ("how is your day going", "I'm doing well! How may I help you?"),
-    ("what's your name", "I'm a chatbot assistant. How may I help you?"),
-    ("who are you", "I'm a chatbot assistant. How may I help you?"),
-    ("who made you", "I was created to assist with questions and tasks."),
-    ("thanks", "You're welcome! Happy to help."),
-    ("thank you", "You're welcome! Happy to help."),
+    ("hello", "Hey!"),
+    ("hi", "Hey!"),
+    ("hey", "Hey!"),
+    ("good morning", "Morning!"),
+    ("good evening", "Evening!"),
+    ("how are you", "Doing great! What's up?"),
+    ("how is the day", "All good here! What can I do for you?"),
+    ("how's the day", "All good here! What can I do for you?"),
+    ("how's your day", "Doing great! What's up?"),
+    ("how was your day", "Doing great! What's up?"),
+    ("how is your day going", "Doing great! What's up?"),
+    ("what's your name", "I'm a chatbot."),
+    ("who are you", "I'm a chatbot."),
+    ("who made you", "I was built to help with questions and coding."),
+    ("thanks", "No problem!"),
+    ("thank you", "No problem!"),
 ])
 
 class SimpleResponseCache:

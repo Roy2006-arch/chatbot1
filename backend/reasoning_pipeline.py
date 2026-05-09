@@ -105,8 +105,9 @@ class InternalPlanner:
             "Explain the trade-offs clearly.",
         ],
         "casual_chat": [
-            "Respond naturally and personably.",
-            "Keep it brief and helpful.",
+            "Respond in 1-2 short sentences.",
+            "Be conversational, not formal.",
+            "No letters, no closings, no sign-offs.",
         ],
         "document_query": [
             "Retrieve relevant context from documents.",
@@ -184,6 +185,12 @@ class ResponseRewriter:
         (re.compile(r'Of course[,!]\s*', re.IGNORECASE), ''),
         (re.compile(r'Absolutely[,!]\s*', re.IGNORECASE), ''),
         (re.compile(r'Great question[,!]\s*', re.IGNORECASE), ''),
+        (re.compile(r'(?:I am|I\'m) (?:an|the) AI(?: assistant| language model)?[,.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'(?:Thank you|Thanks) for (?:your |reaching out|contacting|the )(?:question|message|query|inquiry)[!.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'(?:I hope|Hope) (?:this|that) (?:helps|answers your question|clarifies things|is what you were looking for)[!.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'(?:Please )?(?:feel free|don\'t hesitate) to (?:ask|reach out|let me know)[^.]*[!.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'(?:It\'s|It is) a (?:pleasure|great) to (?:assist|help)[^.]*[!.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'(?:Greetings|Salutations)[!.]?\s*', re.IGNORECASE), ''),
     ]
 
     def rewrite(self, response: str, trace: ReasoningTrace, issues: list[str]) -> str:
