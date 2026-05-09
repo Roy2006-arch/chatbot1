@@ -19,14 +19,20 @@ import os
 from pathlib import Path
 
 _PROMPT_PATH = Path(__file__).parent / "system_prompt.txt"
+_SYSTEM_PROMPT_CACHE: str | None = None
 
 
 def get_system_identity() -> str:
+    global _SYSTEM_PROMPT_CACHE
+    if _SYSTEM_PROMPT_CACHE is not None:
+        return _SYSTEM_PROMPT_CACHE
     try:
         with open(_PROMPT_PATH, "r", encoding="utf-8") as _f:
-            return _f.read()
+            _SYSTEM_PROMPT_CACHE = _f.read()
+            return _SYSTEM_PROMPT_CACHE
     except FileNotFoundError:
-        return "You are a helpful AI assistant."
+        _SYSTEM_PROMPT_CACHE = "You are a helpful AI assistant."
+        return _SYSTEM_PROMPT_CACHE
 
 
 CHARS_PER_TOKEN: int = 4

@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, Any, List
 from threading import Lock
 
-from .db_schema import get_conn, _now_utc
+from .db_schema import get_conn_ctx, _now_utc
 from self_improvement.pipeline import SelfImprovementPipeline
 from self_improvement.schema import ImprovementReport
 from evaluation.scorer import evaluate_response
@@ -49,43 +49,42 @@ class AutoImprover:
 
     def _load_last_check(self) -> str:
         """Load last check timestamp from DB."""
-        conn = get_conn()
-        row = conn.execute(
-            "SELECT notes FROM retrain_runs WHERE run_id=? ORDER BY id DESC LIMIT 1",
-            (_LAST_CHECK_KEY,),
-        ).fetchone()
+        with get_conn_ctx() as conn:
+            row = conn.execute(
+                "SELECT notes FROM retrain_runs WHERE run_id=? ORDER BY id DESC LIMIT 1",
+                (_LAST_CHECK_KEY,),
+            ).fetchone()
         if row:
             return row["notes"]
         return ""
 
     def _save_last_check(self, timestamp: str):
         """Save last check timestamp to DB."""
-        conn = get_conn()
-        existing = conn.execute(
-            "SELECT id FROM retrain_runs WHERE run_id=?", (_LAST_CHECK_KEY,)
-        ).fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE retrain_runs SET notes=?, started_utc=? WHERE run_id=?",
-                (timestamp, timestamp, _LAST_CHECK_KEY),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO retrain_runs (run_id, started_utc, notes) VALUES (?, ?, ?)",
-                (_LAST_CHECK_KEY, timestamp, timestamp),
-            )
-        conn.commit()
+        with get_conn_ctx() as conn:
+            existing = conn.execute(
+                "SELECT id FROM retrain_runs WHERE run_id=?", (_LAST_CHECK_KEY,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE retrain_runs SET notes=?, started_utc=? WHERE run_id=?",
+                    (timestamp, timestamp, _LAST_CHECK_KEY),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO retrain_runs (run_id, started_utc, notes) VALUES (?, ?, ?)",
+                    (_LAST_CHECK_KEY, timestamp, timestamp),
+                )
 
     def count_new_entries(self) -> int:
         """Count feedback entries since last check."""
-        conn = get_conn()
-        if self._last_check_time:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM feedback WHERE timestamp_utc > ?",
-                (self._last_check_time,),
-            ).fetchone()
-        else:
-            row = conn.execute("SELECT COUNT(*) FROM feedback").fetchone()
+        with get_conn_ctx() as conn:
+            if self._last_check_time:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM feedback WHERE timestamp_utc > ?",
+                    (self._last_check_time,),
+                ).fetchone()
+            else:
+                row = conn.execute("SELECT COUNT(*) FROM feedback").fetchone()
         return int(row[0]) if row else 0
 
     def get_last_check_time(self) -> str:

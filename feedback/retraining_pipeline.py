@@ -84,25 +84,18 @@ def _priority_score(record: dict, max_downvotes: int = 10) -> float:
 
 def _enrich_with_downvote_counts(records: list[dict]) -> list[dict]:
     """Attach downvote count from feedback table to each failed query."""
-    try:
-        from .db_schema import get_conn
-    except ImportError:
-        import sys, os
-        root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        if root_path not in sys.path:
-            sys.path.insert(0, root_path)
-        from feedback.db_schema import get_conn
-    conn = get_conn()
-    for rec in records:
-        row = conn.execute(
-            """
-            SELECT COALESCE(SUM(CASE WHEN vote=-1 THEN 1 ELSE 0 END), 0)
-            FROM feedback
-            WHERE conv_id=?
-            """,
-            (rec["conv_id"],),
-        ).fetchone()
-        rec["_downvote_count"] = int(row[0]) if row else 0
+    from .db_schema import get_conn_ctx
+    with get_conn_ctx() as conn:
+        for rec in records:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(CASE WHEN vote=-1 THEN 1 ELSE 0 END), 0)
+                FROM feedback
+                WHERE conv_id=?
+                """,
+                (rec["conv_id"],),
+            ).fetchone()
+            rec["_downvote_count"] = int(row[0]) if row else 0
     return records
 
 
@@ -205,20 +198,12 @@ def _trigger_training(
 # ── Mark retrained candidates resolved ───────────────────────────────────────
 
 def _mark_resolved(record_ids: list[int]) -> None:
-    try:
-        from .db_schema import get_conn
-    except ImportError:
-        import sys, os
-        root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        if root_path not in sys.path:
-            sys.path.insert(0, root_path)
-        from feedback.db_schema import get_conn
-    conn = get_conn()
-    conn.executemany(
-        "UPDATE failed_queries SET resolved=1 WHERE id=?",
-        [(rid,) for rid in record_ids],
-    )
-    conn.commit()
+    from .db_schema import get_conn_ctx
+    with get_conn_ctx() as conn:
+        conn.executemany(
+            "UPDATE failed_queries SET resolved=1 WHERE id=?",
+            [(rid,) for rid in record_ids],
+        )
     log.info("[Retrain] Marked %d records as resolved.", len(record_ids))
 
 
@@ -236,44 +221,36 @@ def _log_retrain_run(
     notes: str = "",
     finished: bool = True,
 ) -> None:
-    try:
-        from .db_schema import get_conn
-    except ImportError:
-        import sys, os
-        root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        if root_path not in sys.path:
-            sys.path.insert(0, root_path)
-        from feedback.db_schema import get_conn
-    conn = get_conn()
+    from .db_schema import get_conn_ctx
     now = datetime.now(timezone.utc).isoformat()
 
-    existing = conn.execute(
-        "SELECT id FROM retrain_runs WHERE run_id=?", (run_id,)
-    ).fetchone()
+    with get_conn_ctx() as conn:
+        existing = conn.execute(
+            "SELECT id FROM retrain_runs WHERE run_id=?", (run_id,)
+        ).fetchone()
 
-    if existing:
-        conn.execute(
-            """
-            UPDATE retrain_runs
-            SET status=?, finished_utc=?, candidates_used=?,
-                model_after=?, avg_score_after=?, notes=?
-            WHERE run_id=?
-            """,
-            (status, now if finished else None, candidates_used,
-             model_after, avg_score_after, notes, run_id),
-        )
-    else:
-        conn.execute(
-            """
-            INSERT INTO retrain_runs
-                (run_id, started_utc, finished_utc, status, candidates_used,
-                 model_before, model_after, avg_score_before, avg_score_after, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            """,
-            (run_id, now, now if finished else None, status, candidates_used,
-             model_before, model_after, avg_score_before, avg_score_after, notes),
-        )
-    conn.commit()
+        if existing:
+            conn.execute(
+                """
+                UPDATE retrain_runs
+                SET status=?, finished_utc=?, candidates_used=?,
+                    model_after=?, avg_score_after=?, notes=?
+                WHERE run_id=?
+                """,
+                (status, now if finished else None, candidates_used,
+                 model_after, avg_score_after, notes, run_id),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO retrain_runs
+                    (run_id, started_utc, finished_utc, status, candidates_used,
+                     model_before, model_after, avg_score_before, avg_score_after, notes)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                """,
+                (run_id, now, now if finished else None, status, candidates_used,
+                 model_before, model_after, avg_score_before, avg_score_after, notes),
+            )
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────

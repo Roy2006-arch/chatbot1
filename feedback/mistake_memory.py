@@ -3,7 +3,7 @@ import logging
 import numpy as np
 from typing import List, Optional, Dict
 
-from .db_schema import get_conn, _now_utc
+from .db_schema import get_conn, close_conn, _now_utc
 from backend.shared_resources import ModelRegistry, get_request_cache
 
 log = logging.getLogger("chatbot.mistake_memory")
@@ -46,48 +46,52 @@ class MistakeMemory:
         reasons_json = json.dumps(failure_reasons or [])
 
         conn = get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, embedding, occurrence_count FROM failed_queries WHERE resolved = 0 AND embedding IS NOT NULL"
+            ).fetchall()
 
-        rows = conn.execute(
-            "SELECT id, embedding, occurrence_count FROM failed_queries WHERE resolved = 0 AND embedding IS NOT NULL"
-        ).fetchall()
+            if rows:
+                emb_list = [np.frombuffer(r["embedding"], dtype=np.float32) for r in rows]
+                sims = self._batch_similarity(embedding, emb_list)
+                max_idx = int(np.argmax(sims)) if len(sims) > 0 else -1
+                best_match_id = rows[max_idx]["id"] if max_idx >= 0 and sims[max_idx] > SIMILARITY_THRESHOLD else None
+            else:
+                best_match_id = None
 
-        if rows:
-            emb_list = [np.frombuffer(r["embedding"], dtype=np.float32) for r in rows]
-            sims = self._batch_similarity(embedding, emb_list)
-            max_idx = int(np.argmax(sims)) if len(sims) > 0 else -1
-            best_match_id = rows[max_idx]["id"] if max_idx >= 0 and sims[max_idx] > SIMILARITY_THRESHOLD else None
-        else:
-            best_match_id = None
+            if best_match_id:
+                conn.execute(
+                    "UPDATE failed_queries SET occurrence_count = occurrence_count + 1, timestamp_utc = ? WHERE id = ?",
+                    (_now_utc(), best_match_id),
+                )
+                log.info("[MistakeMemory] Repeated mistake (id=%d). Count incremented.", best_match_id)
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO failed_queries
+                    (conv_id, session_id, prompt, response, composite_score, grade,
+                     failure_reasons, source, occurrence_count, embedding, timestamp_utc)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (conv_id, session_id, prompt, response, composite_score, grade,
+                     reasons_json, source, embedding_blob, _now_utc()),
+                )
+                log.info("[MistakeMemory] New failure recorded.")
 
-        if best_match_id:
-            conn.execute(
-                "UPDATE failed_queries SET occurrence_count = occurrence_count + 1, timestamp_utc = ? WHERE id = ?",
-                (_now_utc(), best_match_id),
-            )
-            log.info("[MistakeMemory] Repeated mistake (id=%d). Count incremented.", best_match_id)
-        else:
-            conn.execute(
-                """
-                INSERT INTO failed_queries
-                (conv_id, session_id, prompt, response, composite_score, grade,
-                 failure_reasons, source, occurrence_count, embedding, timestamp_utc)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                """,
-                (conv_id, session_id, prompt, response, composite_score, grade,
-                 reasons_json, source, embedding_blob, _now_utc()),
-            )
-            log.info("[MistakeMemory] New failure recorded.")
-
-        conn.commit()
+            conn.commit()
+        finally:
+            close_conn(conn)
 
     def get_relevant_corrections(self, query: str, top_k: int = 2) -> List[Dict]:
         embedding = self._embed(query)
         conn = get_conn()
-
-        rows = conn.execute(
-            "SELECT prompt, response as rejected, preferred_response as chosen, embedding "
-            "FROM failed_queries WHERE preferred_response != '' AND embedding IS NOT NULL"
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                "SELECT prompt, response as rejected, preferred_response as chosen, embedding "
+                "FROM failed_queries WHERE preferred_response != '' AND embedding IS NOT NULL"
+            ).fetchall()
+        finally:
+            close_conn(conn)
 
         if not rows:
             return []

@@ -30,7 +30,7 @@ import math
 import logging
 from typing import Optional
 
-from .db_schema import get_conn, get_conn_ctx, _now_utc
+from .db_schema import get_conn_ctx, _now_utc
 from .mistake_memory import MistakeMemory
 
 log = logging.getLogger("chatbot.feedback_store")
@@ -125,15 +125,15 @@ def _handle_thumbs_down(
     mm = _get_mistake_memory()
     
     # Fetch auto-eval scores from conversations table if available
-    conn = get_conn()
-    conv_row = conn.execute(
-        """
-        SELECT composite_score, grade, failure_reasons
-        FROM conversations
-        WHERE conv_id=? AND turn_index=? AND role='assistant'
-        """,
-        (conv_id, turn_index),
-    ).fetchone()
+    with get_conn_ctx() as conn:
+        conv_row = conn.execute(
+            """
+            SELECT composite_score, grade, failure_reasons
+            FROM conversations
+            WHERE conv_id=? AND turn_index=? AND role='assistant'
+            """,
+            (conv_id, turn_index),
+        ).fetchone()
 
     composite = conv_row["composite_score"] if conv_row else None
     grade     = conv_row["grade"] if conv_row else "?"
@@ -159,15 +159,14 @@ def _check_net_score_for_recovery(conv_id: str, turn_index: int) -> None:
     """
     net = get_net_score(conv_id, turn_index)
     if net > 0:
-        conn = get_conn()
-        conn.execute(
-            """
-            UPDATE failed_queries SET resolved=1
-            WHERE conv_id=? AND source='user' AND resolved=0
-            """,
-            (conv_id,),
-        )
-        conn.commit()
+        with get_conn_ctx() as conn:
+            conn.execute(
+                """
+                UPDATE failed_queries SET resolved=1
+                WHERE conv_id=? AND source='user' AND resolved=0
+                """,
+                (conv_id,),
+            )
         log.info(
             "[Feedback] Net score recovered → marking user-flagged record resolved  conv=%s",
             conv_id,
@@ -178,11 +177,11 @@ def _check_net_score_for_recovery(conv_id: str, turn_index: int) -> None:
 
 def get_net_score(conv_id: str, turn_index: int) -> int:
     """Sum of all votes for a specific turn (up=+1, down=-1)."""
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT COALESCE(SUM(vote), 0) FROM feedback WHERE conv_id=? AND turn_index=?",
-        (conv_id, turn_index),
-    ).fetchone()
+    with get_conn_ctx() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(vote), 0) FROM feedback WHERE conv_id=? AND turn_index=?",
+            (conv_id, turn_index),
+        ).fetchone()
     return int(row[0])
 
 
@@ -196,17 +195,17 @@ def load_all_feedback(limit: int = 1000, vote_filter: Optional[int] = None) -> l
     Return recent feedback records.
     vote_filter: None=all, 1=only 👍, -1=only 👎
     """
-    conn = get_conn()
-    if vote_filter is not None:
-        rows = conn.execute(
-            "SELECT * FROM feedback WHERE vote=? ORDER BY id DESC LIMIT ?",
-            (vote_filter, limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM feedback ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+    with get_conn_ctx() as conn:
+        if vote_filter is not None:
+            rows = conn.execute(
+                "SELECT * FROM feedback WHERE vote=? ORDER BY id DESC LIMIT ?",
+                (vote_filter, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM feedback ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -216,7 +215,6 @@ def load_failed_queries(
     unresolved_only: bool = True,
 ) -> list[dict]:
     """Return failed queries for retraining pipeline consumption."""
-    conn = get_conn()
     clauses = []
     params: list = []
 
@@ -229,10 +227,11 @@ def load_failed_queries(
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(limit)
 
-    rows = conn.execute(
-        f"SELECT * FROM failed_queries {where} ORDER BY id DESC LIMIT ?",
-        params,
-    ).fetchall()
+    with get_conn_ctx() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM failed_queries {where} ORDER BY id DESC LIMIT ?",
+            params,
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -240,32 +239,31 @@ def load_failed_queries(
 
 def feedback_summary() -> dict:
     """Aggregate statistics for the feedback dashboard."""
-    conn = get_conn()
+    with get_conn_ctx() as conn:
+        totals = conn.execute(
+            """
+            SELECT
+                COUNT(*)                             AS total_votes,
+                SUM(CASE WHEN vote=1 THEN 1 ELSE 0 END) AS thumbs_up,
+                SUM(CASE WHEN vote=-1 THEN 1 ELSE 0 END) AS thumbs_down
+            FROM feedback
+            """
+        ).fetchone()
 
-    totals = conn.execute(
-        """
-        SELECT
-            COUNT(*)                             AS total_votes,
-            SUM(CASE WHEN vote=1 THEN 1 ELSE 0 END) AS thumbs_up,
-            SUM(CASE WHEN vote=-1 THEN 1 ELSE 0 END) AS thumbs_down
-        FROM feedback
-        """
-    ).fetchone()
+        failed = conn.execute(
+            """
+            SELECT
+                COUNT(*)                                   AS total,
+                SUM(CASE WHEN source='auto' THEN 1 ELSE 0 END) AS auto_flagged,
+                SUM(CASE WHEN source='user' THEN 1 ELSE 0 END) AS user_flagged,
+                SUM(CASE WHEN resolved=1   THEN 1 ELSE 0 END)  AS resolved
+            FROM failed_queries
+            """
+        ).fetchone()
 
-    failed = conn.execute(
-        """
-        SELECT
-            COUNT(*)                                   AS total,
-            SUM(CASE WHEN source='auto' THEN 1 ELSE 0 END) AS auto_flagged,
-            SUM(CASE WHEN source='user' THEN 1 ELSE 0 END) AS user_flagged,
-            SUM(CASE WHEN resolved=1   THEN 1 ELSE 0 END)  AS resolved
-        FROM failed_queries
-        """
-    ).fetchone()
-
-    avg_score = conn.execute(
-        "SELECT AVG(composite_score) FROM conversations WHERE role='assistant'"
-    ).fetchone()[0]
+        avg_score = conn.execute(
+            "SELECT AVG(composite_score) FROM conversations WHERE role='assistant'"
+        ).fetchone()[0]
 
     return {
         "total_votes":   totals["total_votes"] or 0,

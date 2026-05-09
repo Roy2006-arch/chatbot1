@@ -26,7 +26,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel, validator
 
-from .db_schema import get_conn, init_db
+from .db_schema import get_conn_ctx, init_db
 from .feedback_store import (
     record_feedback,
     load_all_feedback,
@@ -152,22 +152,21 @@ def annotate_failed_query(req: AnnotateRequest):
     Allows human annotators to provide the 'chosen' (ideal) response for a
     failed query. This will be included in the next DPO training export.
     """
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT id FROM failed_queries WHERE id=?", (req.failed_query_id,)
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Failed query #{req.failed_query_id} not found")
+    with get_conn_ctx() as conn:
+        row = conn.execute(
+            "SELECT id FROM failed_queries WHERE id=?", (req.failed_query_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Failed query #{req.failed_query_id} not found")
 
-    conn.execute(
-        """
-        UPDATE failed_queries
-        SET preferred_response=?, resolved=0
-        WHERE id=?
-        """,
-        (req.preferred_response, req.failed_query_id),
-    )
-    conn.commit()
+        conn.execute(
+            """
+            UPDATE failed_queries
+            SET preferred_response=?, resolved=0
+            WHERE id=?
+            """,
+            (req.preferred_response, req.failed_query_id),
+        )
     return {
         "status": "annotated",
         "failed_query_id": req.failed_query_id,
@@ -203,10 +202,10 @@ def trigger_retrain(req: RetrainRequest, background_tasks: BackgroundTasks):
 @router.get("/retrain/status", summary="Status of the last retraining run")
 def retrain_status():
     """Returns the most recent entry from retrain_runs."""
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT * FROM retrain_runs ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    with get_conn_ctx() as conn:
+        row = conn.execute(
+            "SELECT * FROM retrain_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
     if not row:
         return {"status": "no_runs", "message": "No retraining runs recorded yet."}
     return dict(row)

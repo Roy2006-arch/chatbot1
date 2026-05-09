@@ -16,7 +16,7 @@ import logging
 import os
 from typing import Dict, List, Optional, Any
 
-from .db_schema import get_conn, _now_utc
+from .db_schema import get_conn_ctx, _now_utc
 from .mistake_memory import MistakeMemory
 from self_improvement.schema import (
     SelfImprovementExample, CorrectionMethod, ExampleSource, ImprovementReport
@@ -57,16 +57,15 @@ def push_corrections_to_mistake_memory(
             failure_reasons=ex.failure_reasons + ["Corrected by self-improvement pipeline"],
         )
 
-        conn = get_conn()
-        conn.execute(
-            """
-            UPDATE failed_queries
-            SET preferred_response = ?, resolved = 1
-            WHERE prompt = ? AND source = ?
-            """,
-            (ex.corrected_response, ex.prompt[:200], _IMPROVEMENT_SOURCE),
-        )
-        conn.commit()
+        with get_conn_ctx() as conn:
+            conn.execute(
+                """
+                UPDATE failed_queries
+                SET preferred_response = ?, resolved = 1
+                WHERE prompt = ? AND source = ?
+                """,
+                (ex.corrected_response, ex.prompt[:200], _IMPROVEMENT_SOURCE),
+            )
 
         pushed += 1
 

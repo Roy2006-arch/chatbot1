@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import threading
+import queue
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -9,9 +10,12 @@ DB_DIR = os.path.join(_PROJECT_ROOT, "data", "feedback")
 DB_PATH = os.path.join(DB_DIR, "feedback.db")
 
 _db_lock = threading.RLock()
+_db_initialized = False
+_connection_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
+_POOL_SIZE = 3
 
 
-def _connect() -> sqlite3.Connection:
+def _create_conn() -> sqlite3.Connection:
     os.makedirs(DB_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -21,10 +25,40 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def init_pool():
+    global _db_initialized
+    if _db_initialized:
+        return
+    with _db_lock:
+        if _db_initialized:
+            return
+        for _ in range(_POOL_SIZE):
+            _connection_pool.put(_create_conn())
+        conn = borrow_conn()
+        conn.executescript(_SCHEMA)
+        conn.commit()
+        return_conn(conn)
+        _db_initialized = True
+
+
+def borrow_conn() -> sqlite3.Connection:
+    try:
+        return _connection_pool.get_nowait()
+    except queue.Empty:
+        return _create_conn()
+
+
+def return_conn(conn: sqlite3.Connection):
+    try:
+        _connection_pool.put_nowait(conn)
+    except queue.Full:
+        conn.close()
+
+
 @contextmanager
 def get_conn_ctx():
     """Provide a transactional scope around a series of operations."""
-    conn = _connect()
+    conn = borrow_conn()
     try:
         yield conn
         conn.commit()
@@ -32,7 +66,7 @@ def get_conn_ctx():
         conn.rollback()
         raise
     finally:
-        conn.close()
+        return_conn(conn)
 
 
 _SCHEMA = """
@@ -115,18 +149,19 @@ CREATE TABLE IF NOT EXISTS retrain_runs (
 
 
 def init_db() -> None:
-    with _db_lock:
-        conn = _connect()
-        conn.executescript(_SCHEMA)
-        conn.commit()
-        conn.close()
+    init_pool()
     print(f"[FeedbackDB] Database ready at {os.path.abspath(DB_PATH)}")
 
 
 def get_conn() -> sqlite3.Connection:
-    """Get a new connection. Caller must commit and close, or use get_conn_ctx()."""
-    init_db()
-    return _connect()
+    """Get a connection from the pool. Caller must commit and call close_conn() when done."""
+    init_pool()
+    return borrow_conn()
+
+
+def close_conn(conn: sqlite3.Connection):
+    """Return a connection to the pool (or close if pool is full)."""
+    return_conn(conn)
 
 
 def _now_utc() -> str:

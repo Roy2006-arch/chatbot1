@@ -16,7 +16,7 @@ import uuid
 import logging
 from typing import Optional
 
-from .db_schema import get_conn, get_conn_ctx, _now_utc
+from .db_schema import get_conn, close_conn, get_conn_ctx, _now_utc
 from .mistake_memory import MistakeMemory
 
 # Lazy import to avoid loading sentence-transformers unless scoring is needed
@@ -180,26 +180,26 @@ def new_conv_id() -> str:
 
 def load_conversation(conv_id: str) -> list[dict]:
     """Return all turns for a conversation, ordered by turn_index."""
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT * FROM conversations WHERE conv_id=? ORDER BY turn_index",
-        (conv_id,),
-    ).fetchall()
+    with get_conn_ctx() as conn:
+        rows = conn.execute(
+            "SELECT * FROM conversations WHERE conv_id=? ORDER BY turn_index",
+            (conv_id,),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
 def load_session_conversations(session_id: str, limit: int = 50) -> list[dict]:
     """Return recent conversations for a session (newest first)."""
-    conn = get_conn()
-    rows = conn.execute(
-        """
-        SELECT DISTINCT conv_id, MAX(timestamp_utc) as last_ts
-        FROM conversations
-        WHERE session_id = ?
-        GROUP BY conv_id
-        ORDER BY last_ts DESC
-        LIMIT ?
-        """,
-        (session_id, limit),
-    ).fetchall()
+    with get_conn_ctx() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT conv_id, MAX(timestamp_utc) as last_ts
+            FROM conversations
+            WHERE session_id = ?
+            GROUP BY conv_id
+            ORDER BY last_ts DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        ).fetchall()
     return [dict(r) for r in rows]

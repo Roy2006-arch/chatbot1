@@ -156,6 +156,14 @@ retriever = RAGRetriever(
 reasoning_pipeline = ReasoningPipeline(refinement_threshold=0.55)
 url_verifier = URLVerifier()
 orchestrator = UnifiedOrchestrator()
+_mistake_memory: MistakeMemory | None = None
+
+
+def get_mistake_memory() -> MistakeMemory:
+    global _mistake_memory
+    if _mistake_memory is None:
+        _mistake_memory = MistakeMemory()
+    return _mistake_memory
 
 lifecycle_manager = MemoryLifecycleManager(
     context_manager=memory_manager,
@@ -568,8 +576,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     corrections_block = None
     if not request.is_continuation and not is_simple and augmented_messages and augmented_messages[0]["role"] == "system":
         try:
-            mm = MistakeMemory()
-            corrections_block = await asyncio.to_thread(mm.format_corrections_for_prompt, request.message)
+            corrections_block = await asyncio.to_thread(get_mistake_memory().format_corrections_for_prompt, request.message)
         except Exception as e:
             logger.warning("[MistakeMemory] Injection error: %s", e)
 
