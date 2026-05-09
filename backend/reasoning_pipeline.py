@@ -11,6 +11,7 @@ from backend.dsa_expert import DSAExpert, ExecutionTracer
 from backend.hallucination_guard import HallucinationGuard
 from backend.validation_engine import ResponseValidationEngine
 from backend.url_verifier import URLVerifier, ResponseURLReport
+from backend.refinement_middleware import ResponseRefinementMiddleware
 
 logger = logging.getLogger("reasoning_pipeline")
 logger.setLevel(logging.DEBUG)
@@ -243,6 +244,7 @@ class ReasoningPipeline:
         self.guard = HallucinationGuard()
         self.validator = ResponseValidationEngine()
         self.url_verifier = URLVerifier()
+        self.refinement_middleware = ResponseRefinementMiddleware()
         self.threshold = refinement_threshold
         self._last_trace: Optional[ReasoningTrace] = None
 
@@ -368,6 +370,8 @@ class ReasoningPipeline:
         else:
             final = self.rewriter._basic_cleanup(draft_response)
             trace.refinement_applied = False
+
+        final = self.refinement_middleware.refine_response(user_message, final)
 
         trace.latency_ms += round((time.perf_counter() - t0) * 1000, 2)
         return final, trace
