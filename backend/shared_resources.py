@@ -48,6 +48,11 @@ def set_request_cache(cache: Optional[RequestEmbeddingCache]):
     _request_embedding_cache.set(cache)
 
 
+def reset_request_cache():
+    """Clear and reset the per-request embedding cache."""
+    _request_embedding_cache.set(None)
+
+
 class ModelRegistry:
     """
     Singleton registry for shared heavy models to prevent redundant memory usage.

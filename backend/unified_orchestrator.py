@@ -80,10 +80,15 @@ class UnifiedOrchestrator:
     def get_current_state(self, session_id: str) -> ResponseLifecycle:
         return self._get_state(session_id).state
 
+    MAX_BUFFER_CHARS = 100_000
+
     def process_chunk(self, session_id: str, chunk: str) -> str:
         state = self._get_state(session_id)
         with self._lock:
             prev_len = len(state.buffer)
+            if len(state.buffer) > self.MAX_BUFFER_CHARS:
+                state.buffer = state.buffer[-self.MAX_BUFFER_CHARS:]
+                prev_len = len(state.buffer)
             state.buffer += chunk
             state.token_count += 1
 
@@ -233,6 +238,7 @@ class UnifiedOrchestrator:
             to_delete = [
                 sid for sid, state in self._sessions.items()
                 if now - state.start_time > ttl_seconds
+                and state.state in (ResponseLifecycle.FINALIZED, ResponseLifecycle.INIT)
             ]
             for sid in to_delete:
                 del self._sessions[sid]

@@ -118,13 +118,14 @@ def get_failed_queries(
     unresolved_only: bool = Query(True),
 ):
     """Return failed queries sorted by recency, ready for human annotation."""
+    results = load_failed_queries(
+        limit=limit,
+        source_filter=source,
+        unresolved_only=unresolved_only,
+    )
     return {
-        "count":   None,
-        "results": load_failed_queries(
-            limit=limit,
-            source_filter=source,
-            unresolved_only=unresolved_only,
-        ),
+        "count": len(results),
+        "results": results,
     }
 
 

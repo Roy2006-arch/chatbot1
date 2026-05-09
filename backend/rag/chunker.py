@@ -138,28 +138,27 @@ class TextChunker:
         buf_len = 0
         chunk_idx = 0
         char_cursor = 0
+        chunk_start_char = 0
 
         for sent in sentences:
-            sent_len = len(sent) + 1  # +1 for space separator
+            sent_len = len(sent) + 1
 
-            # --- Buffer would overflow: emit current chunk, start new with overlap ---
             if buf and buf_len + sent_len > self.chunk_size:
                 chunk_text = " ".join(buf)
-                char_start = original.find(chunk_text, max(0, char_cursor - len(chunk_text) - 20))
-                char_end   = char_start + len(chunk_text)
+                char_start = chunk_start_char
+                char_end = char_start + len(chunk_text)
 
                 if len(chunk_text) >= self.min_size:
                     chunks.append(Chunk(
                         text=chunk_text,
                         source=source,
                         chunk_index=chunk_idx,
-                        char_start=max(0, char_start),
+                        char_start=char_start,
                         char_end=char_end,
                         metadata=metadata,
                     ))
                     chunk_idx += 1
 
-                # Slide window: carry over overlap sentences
                 overlap_buf: list[str] = []
                 overlap_len = 0
                 for s in reversed(buf):
@@ -169,24 +168,26 @@ class TextChunker:
                     else:
                         break
 
-                buf     = overlap_buf
+                buf = overlap_buf
                 buf_len = overlap_len
+                chunk_start_char = char_cursor - buf_len
+
+            if not buf:
+                chunk_start_char = char_cursor
 
             buf.append(sent)
             buf_len += sent_len
             char_cursor += sent_len
 
-        # --- Flush remaining sentences ---
         if buf:
             chunk_text = " ".join(buf)
             if len(chunk_text) >= self.min_size:
-                char_start = original.rfind(chunk_text[:50]) if len(chunk_text) > 50 else original.rfind(chunk_text)
                 chunks.append(Chunk(
                     text=chunk_text,
                     source=source,
                     chunk_index=chunk_idx,
-                    char_start=max(0, char_start),
-                    char_end=max(0, char_start) + len(chunk_text),
+                    char_start=chunk_start_char,
+                    char_end=chunk_start_char + len(chunk_text),
                     metadata=metadata,
                 ))
 

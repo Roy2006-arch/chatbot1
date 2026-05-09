@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import threading
 from typing import Any, Dict, List, Optional, AsyncGenerator
 
 import torch
+from transformers import AutoTokenizer
 
 try:
     from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
@@ -17,11 +19,13 @@ class InferenceManager:
     def __init__(
         self,
         model_name: str,
+        tokenizer: Optional[AutoTokenizer] = None,
         gpu_memory_utilization: float = 0.85,
         max_model_len: int = 4096,
         trust_remote_code: bool = True,
     ):
         self.model_name = model_name
+        self.tokenizer = tokenizer
         self.use_vllm = HAS_VLLM and torch.cuda.is_available()
         self.engine = None
         self.fallback_pipeline = None
@@ -49,6 +53,7 @@ class InferenceManager:
             self.fallback_pipeline = pipeline(
                 "text-generation",
                 model=model_name,
+                tokenizer=tokenizer,
                 device=device,
                 trust_remote_code=trust_remote_code,
             )
@@ -78,23 +83,31 @@ class InferenceManager:
                 if new_text:
                     yield new_text
         else:
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.fallback_pipeline(
-                    prompt,
-                    max_new_tokens=sampling_kwargs.get("max_new_tokens", 1024),
-                    temperature=sampling_kwargs.get("temperature", 0.7),
-                    top_p=sampling_kwargs.get("top_p", 0.9),
-                    do_sample=True,
-                    pad_token_id=50256,
-                ),
+            from backend.queue_streamer import QueueStreamer
+            tokenizer = self.tokenizer
+            if tokenizer is None:
+                tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                if tokenizer.pad_token is None:
+                    tokenizer.pad_token = tokenizer.eos_token
+            queue: asyncio.Queue = asyncio.Queue()
+            streamer = QueueStreamer(tokenizer, queue, skip_prompt=True)
+            kwargs = dict(
+                max_new_tokens=sampling_kwargs.get("max_new_tokens", 1024),
+                temperature=sampling_kwargs.get("temperature", 0.7),
+                top_p=sampling_kwargs.get("top_p", 0.9),
+                do_sample=True,
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                streamer=streamer,
             )
-            full_text = result[0]["generated_text"]
-            if full_text.startswith(prompt):
-                yield full_text[len(prompt):]
-            else:
-                yield full_text
+            def _generate():
+                self.fallback_pipeline(prompt, **kwargs)
+            thread = threading.Thread(target=_generate, daemon=True)
+            thread.start()
+            while True:
+                token = await queue.get()
+                if token is None:
+                    break
+                yield token
 
     async def generate_full(
         self,
@@ -118,13 +131,19 @@ class InferenceManager:
                 return [out.text for out in final_output.outputs]
         else:
             loop = asyncio.get_event_loop()
+            n = sampling_kwargs.get("n", 1)
+            temperature = sampling_kwargs.get("temperature", 0.7)
+            top_p = sampling_kwargs.get("top_p", 0.9)
             result = await loop.run_in_executor(
                 None,
                 lambda: self.fallback_pipeline(
                     prompt,
                     max_new_tokens=sampling_kwargs.get("max_new_tokens", 1024),
-                    num_return_sequences=sampling_kwargs.get("n", 1),
-                    do_sample=True,
+                    num_return_sequences=n,
+                    do_sample=n > 1 or temperature > 0,
+                    temperature=temperature,
+                    top_p=top_p,
+                    pad_token_id=self.tokenizer.pad_token_id if self.tokenizer else 50256,
                 ),
             )
             return [r["generated_text"][len(prompt):] for r in result]

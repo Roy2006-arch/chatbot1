@@ -30,7 +30,7 @@ import math
 import logging
 from typing import Optional
 
-from .db_schema import get_conn, _now_utc
+from .db_schema import get_conn, get_conn_ctx, _now_utc
 from .mistake_memory import MistakeMemory
 
 log = logging.getLogger("chatbot.feedback_store")
@@ -77,18 +77,16 @@ def record_feedback(
         raise ValueError(f"vote must be +1 or -1, got {vote}")
 
     now = _now_utc()
-    conn = get_conn()
-
-    conn.execute(
-        """
-        INSERT INTO feedback
-            (conv_id, turn_index, session_id, vote, comment,
-             timestamp_utc, prompt, response)
-        VALUES (?,?,?,?,?,?,?,?)
-        """,
-        (conv_id, turn_index, session_id, vote, comment, now, prompt, response),
-    )
-    conn.commit()
+    with get_conn_ctx() as conn:
+        conn.execute(
+            """
+            INSERT INTO feedback
+                (conv_id, turn_index, session_id, vote, comment,
+                 timestamp_utc, prompt, response)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (conv_id, turn_index, session_id, vote, comment, now, prompt, response),
+        )
 
     vote_label = "👍 thumbs_up" if vote == 1 else "👎 thumbs_down"
     log.info("[Feedback] %s  conv=%s  turn=%d", vote_label, conv_id, turn_index)

@@ -30,6 +30,10 @@ class StreamManager:
             self._finalized = True
             await self.queue.put(None)
 
+    @property
+    def is_finalized(self) -> bool:
+        return self._finalized
+
     async def event_generator(self, timeout: float = 60.0) -> AsyncGenerator[str, None]:
         try:
             while True:
@@ -54,7 +58,15 @@ class StreamManager:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     def _suppress_thought_tags(self, token: str) -> list[str]:
+        MAX_THOUGHT_BUFFER = 8192
         self._buffer_for_thought += token
+        if len(self._buffer_for_thought) > MAX_THOUGHT_BUFFER:
+            overflow = self._buffer_for_thought[:MAX_THOUGHT_BUFFER // 2]
+            self._buffer_for_thought = self._buffer_for_thought[MAX_THOUGHT_BUFFER // 2:]
+            if not self._in_thought:
+                return [overflow] if overflow else []
+            self._thought_content += overflow
+            return []
         if not self._in_thought:
             parts = self._buffer_for_thought.split("<thought>")
             if len(parts) > 1:

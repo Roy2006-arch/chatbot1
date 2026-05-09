@@ -21,10 +21,18 @@ marked.use({
 });
 
 marked.setOptions({
-    breaks: true,        // Convert \n to <br>
-    gfm: true,           // GitHub Flavoured Markdown (tables, code blocks, etc.)
-    sanitize: false      // We trust our own backend output
+    breaks: true,
+    gfm: true,
 });
+
+function sanitizeHTML(dirty) {
+    if (typeof DOMPurify !== 'undefined' && DOMPurify.sanitize) {
+        return DOMPurify.sanitize(dirty, { ADD_TAGS: ['use', 'svg', 'path'], ADD_ATTR: ['viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'd', 'xmlns'] });
+    }
+    var tmp = document.createElement('div');
+    tmp.textContent = dirty;
+    return tmp.innerHTML;
+}
 
 // Global copy function
 window.copyCode = function(button) {
@@ -180,7 +188,7 @@ function renderUserMessage(text, container) {
     // 1. Check if user manually provided markdown code blocks
     if (text.includes('```')) {
         const p = document.createElement('div');
-        p.textContent = text; // Safe text rendering
+        p.textContent = text;
         container.appendChild(p);
         return;
     }
@@ -197,20 +205,19 @@ function renderUserMessage(text, container) {
             
             const header = document.createElement('div');
             header.className = 'code-block-header';
-            header.innerHTML = `
+            header.innerHTML = sanitizeHTML(`
                 <span class="code-lang">${lang}</span>
                 <button class="copy-btn" onclick="copyCode(this)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     Copy
                 </button>
-            `;
+            `);
 
             const pre = document.createElement('pre');
             const code = document.createElement('code');
             code.className = `hljs language-${lang}`;
-            code.textContent = block; // Safely insert as text (prevents XSS)
+            code.textContent = block;
             
-            // Apply Highlight.js to the user's code block
             hljs.highlightElement(code);
             
             pre.appendChild(code);
@@ -219,10 +226,9 @@ function renderUserMessage(text, container) {
             container.appendChild(wrapper);
         } else {
             const div = document.createElement('div');
-            div.textContent = block; // Safely insert as text
+            div.textContent = block;
             container.appendChild(div);
             
-            // Add spacing between blocks
             const br = document.createElement('br');
             container.appendChild(br);
             const br2 = document.createElement('br');
@@ -230,7 +236,6 @@ function renderUserMessage(text, container) {
         }
     });
     
-    // Remove trailing breaks
     while (container.lastChild && container.lastChild.tagName === 'BR') {
         container.removeChild(container.lastChild);
     }
@@ -277,7 +282,7 @@ async function sendMessage() {
             }
             
             renderText += (isDone ? '' : ' ▌');
-            return marked.parse(renderText);
+            return sanitizeHTML(marked.parse(renderText));
         };
 
         // Token queue for smooth typing
@@ -288,7 +293,6 @@ async function sendMessage() {
             if (!renderLoopActive) return;
 
             if (tokenQueue.length > 0) {
-                // Smooth typing: pop a subset of tokens depending on queue size
                 let tokensToPop = 1;
                 if (tokenQueue.length > 100) tokensToPop = Math.ceil(tokenQueue.length / 5);
                 else if (tokenQueue.length > 20) tokensToPop = 5;
@@ -301,9 +305,10 @@ async function sendMessage() {
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             }
             
-            requestAnimationFrame(processQueue);
+            if (renderLoopActive) {
+                requestAnimationFrame(processQueue);
+            }
         };
-        // Start the debounced render loop
         requestAnimationFrame(processQueue);
 
         // Remove typing indicator once loop starts
@@ -419,17 +424,17 @@ async function sendMessage() {
         aiContent.innerHTML = renderMarkdownStream(fullResponse, true);
         chatMessages.scrollTop = chatMessages.scrollHeight;
 
-        // --- FIX 1: Hallucination guard fired (empty response) ---
         if (fullResponse.trim() === '') {
-            aiContent.innerHTML = marked.parse(
-                '⚠️ *My response was filtered for safety. Please try rephrasing your message.*'
+            aiContent.innerHTML = sanitizeHTML(
+                marked.parse('⚠️ *My response was filtered for safety. Please try rephrasing your message.*')
             );
         }
 
     } catch (error) {
-        // Ensure queue process stops
         renderLoopActive = false;
-        aiContent.innerHTML = marked.parse('❌ **Error:** Could not reach the backend server. Please ensure it is running on `127.0.0.1:8000`.');
+        aiContent.innerHTML = sanitizeHTML(
+            marked.parse('❌ **Error:** Could not reach the backend server. Please ensure it is running on `127.0.0.1:8000`.')
+        );
     }
 }
 
@@ -460,9 +465,8 @@ fileInput.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     
-    // UI Feedback
     const { messageDiv, contentDiv } = createMessageElement('user');
-    contentDiv.innerHTML = `<em>Uploading document: ${file.name}...</em>`;
+    contentDiv.textContent = `Uploading document: ${file.name}...`;
     chatMessages.appendChild(messageDiv);
     chatMessages.scrollTo({ top: chatMessages.scrollHeight, behavior: 'smooth' });
     

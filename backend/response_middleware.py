@@ -5,6 +5,8 @@ import logging
 import time
 from pathlib import Path
 
+import aiofiles
+
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp
@@ -46,8 +48,8 @@ class ReasoningAuditMiddleware(BaseHTTPMiddleware):
                     "total_request_ms": elapsed_ms,
                 }
                 try:
-                    with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
-                        f.write(json.dumps(audit_entry, ensure_ascii=False) + "\n")
+                    async with aiofiles.open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+                        await f.write(json.dumps(audit_entry, ensure_ascii=False) + "\n")
                 except OSError as exc:
                     logger.warning("Could not write audit log: %s", exc)
 

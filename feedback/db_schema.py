@@ -1,13 +1,14 @@
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
-_HERE = os.path.dirname(__file__)
-DB_DIR = os.path.join(_HERE, "..", "data", "feedback")
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DB_DIR = os.path.join(_PROJECT_ROOT, "data", "feedback")
 DB_PATH = os.path.join(DB_DIR, "feedback.db")
 
-_db_lock = threading.Lock()
+_db_lock = threading.RLock()
 
 
 def _connect() -> sqlite3.Connection:
@@ -18,6 +19,20 @@ def _connect() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.execute("PRAGMA busy_timeout=5000;")
     return conn
+
+
+@contextmanager
+def get_conn_ctx():
+    """Provide a transactional scope around a series of operations."""
+    conn = _connect()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 _SCHEMA = """
@@ -108,15 +123,10 @@ def init_db() -> None:
     print(f"[FeedbackDB] Database ready at {os.path.abspath(DB_PATH)}")
 
 
-_CONN: sqlite3.Connection | None = None
-
-
 def get_conn() -> sqlite3.Connection:
-    global _CONN
-    if _CONN is None:
-        init_db()
-        _CONN = _connect()
-    return _CONN
+    """Get a new connection. Caller must commit and close, or use get_conn_ctx()."""
+    init_db()
+    return _connect()
 
 
 def _now_utc() -> str:

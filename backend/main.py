@@ -69,6 +69,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     stop_auto_improve_scheduler()
     await lifecycle_manager.stop()
+    await url_verifier.close()
     global _CPU_POOL
     if _CPU_POOL:
         _CPU_POOL.shutdown(wait=False)
@@ -121,6 +122,7 @@ MODEL_NAME = MODELS.get(MODE, "gpt2")
 logger.info("Initializing vLLM with %s...", MODEL_NAME)
 inference_manager = InferenceManager(
     model_name=MODEL_NAME,
+    tokenizer=tokenizer,
     gpu_memory_utilization=0.85,
     max_model_len=4096,
 )
@@ -168,7 +170,7 @@ INTENTS_REQUIRING_RAG = [
     "architecture", "optimization", "document_query", "general",
 ]
 MAX_STREAM_SECONDS = 60
-MAX_AUTORETRY = 0
+MAX_AUTORETRY = 3
 MAX_CONTINUATION_NEW_TOKENS = 1024
 
 GREETING_RESPONSES = OrderedDict([
@@ -419,6 +421,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             )
             orchestrator.reset_session(request.session_id)
 
+            _cleanup_request_cache()
             async def realtime_stream():
                 yield f"data: {json.dumps({'content': realtime_response, 'conv_id': conv_id})}\n\n"
                 yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
@@ -448,6 +451,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             )
             orchestrator.reset_session(request.session_id)
 
+            _cleanup_request_cache()
             async def greeting_stream():
                 yield f"data: {json.dumps({'content': greeting_response, 'conv_id': conv_id})}\n\n"
                 yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
@@ -477,6 +481,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             )
             orchestrator.reset_session(request.session_id)
 
+            _cleanup_request_cache()
             async def cached_stream():
                 yield f"data: {json.dumps({'content': cached_response, 'conv_id': conv_id})}\n\n"
                 yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
@@ -702,9 +707,14 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         finally:
             stream_finished = True
             disconnect_monitor.cancel()
+            primary_task.cancel()
+            if secondary_task:
+                secondary_task.cancel()
+            try:
+                await primary_task
+            except asyncio.CancelledError:
+                pass
             _cleanup_request_cache()
-
-        await primary_task
 
         secondary_candidates = []
         if secondary_task:

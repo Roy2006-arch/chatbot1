@@ -16,7 +16,7 @@ import uuid
 import logging
 from typing import Optional
 
-from .db_schema import get_conn, _now_utc
+from .db_schema import get_conn, get_conn_ctx, _now_utc
 from .mistake_memory import MistakeMemory
 
 # Lazy import to avoid loading sentence-transformers unless scoring is needed
@@ -91,24 +91,23 @@ def log_turn(
             from evaluation.logger import detect_failure_reasons
             failure_reasons = detect_failure_reasons(prompt, content, scores)
 
-    conn = get_conn()
-    conn.execute(
-        """
-        INSERT INTO conversations
-            (conv_id, session_id, turn_index, role, content, model_name,
-             timestamp_utc, score_relevance, score_coherence, score_accuracy,
-             composite_score, grade, ttft_seconds, total_time_seconds,
-             is_bad_response, failure_reasons)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            conv_id, session_id, turn_index, role, content, model_name,
-            now, score_rel, score_coh, score_acc,
-            composite, grade, ttft_seconds, total_time_seconds,
-            is_bad, json.dumps(failure_reasons),
-        ),
-    )
-    conn.commit()
+    with get_conn_ctx() as conn:
+        conn.execute(
+            """
+            INSERT INTO conversations
+                (conv_id, session_id, turn_index, role, content, model_name,
+                 timestamp_utc, score_relevance, score_coherence, score_accuracy,
+                 composite_score, grade, ttft_seconds, total_time_seconds,
+                 is_bad_response, failure_reasons)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                conv_id, session_id, turn_index, role, content, model_name,
+                now, score_rel, score_coh, score_acc,
+                composite, grade, ttft_seconds, total_time_seconds,
+                is_bad, json.dumps(failure_reasons),
+            ),
+        )
 
     record = {
         "conv_id": conv_id,

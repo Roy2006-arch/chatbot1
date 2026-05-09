@@ -281,6 +281,16 @@ class RealtimeHandler:
     def get_user_timezone(self, session_id: str) -> Optional[str]:
         return self._user_timezones.get(session_id)
 
+    def cleanup_session(self, session_id: str) -> None:
+        self._user_timezones.pop(session_id, None)
+
+    def cleanup_idle_sessions(self, idle_ttl: float = 7200) -> int:
+        now_time = time.time()
+        stale = list(self._user_timezones.keys())[:max(0, len(self._user_timezones) - 10000)]
+        for sid in stale:
+            self._user_timezones.pop(sid, None)
+        return len(stale)
+
     def _get_resolved_label(self, tz: tzinfo | None, tz_name: str | None) -> str:
         if tz is None:
             return "UTC"

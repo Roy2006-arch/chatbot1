@@ -5,6 +5,7 @@ import gc
 import torch
 from typing import Optional
 from backend.shared_resources import ModelRegistry
+from backend.realtime_utils import realtime_handler
 
 logger = logging.getLogger("chatbot.lifecycle")
 
@@ -66,6 +67,8 @@ class MemoryLifecycleManager:
         if self.doc_processor:
             docs_cleaned = self.doc_processor.cleanup_idle_sessions(self.session_ttl)
 
+        realtime_cleaned = realtime_handler.cleanup_idle_sessions(7200)
+
         gc.collect()
 
         if torch.cuda.is_available():
@@ -83,6 +86,7 @@ class MemoryLifecycleManager:
         self.context_manager.cleanup_idle_sessions(0)
         if self.doc_processor:
             self.doc_processor.cleanup_idle_sessions(0)
+        realtime_handler.cleanup_session(session_id)
         logger.debug("[LifecycleManager] Cleaned up session: %s", session_id)
 
     def force_cleanup_request(self, session_id: str):

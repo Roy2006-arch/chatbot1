@@ -94,7 +94,7 @@ class URLVerifier:
         self.max_urls = max_urls_per_response
         self._session: Optional[object] = None
 
-    async def _get_session(self):
+    async def get_or_create_session(self):
         if self._session is None:
             import aiohttp
             self._session = aiohttp.ClientSession(
@@ -107,6 +107,12 @@ class URLVerifier:
         if self._session:
             await self._session.close()
             self._session = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        await self.close()
 
     def extract_urls(self, text: str) -> list[str]:
         return list(dict.fromkeys(URL_PATTERN.findall(text)))[:self.max_urls]
@@ -176,7 +182,7 @@ class URLVerifier:
 
     async def _check_reachable(self, url: str) -> bool:
         try:
-            session = await self._get_session()
+            session = await self.get_or_create_session()
             async with session.head(url, allow_redirects=True, timeout=self.request_timeout) as resp:
                 return resp.status < 500
         except (asyncio.TimeoutError, Exception) as e:
