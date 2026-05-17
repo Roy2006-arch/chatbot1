@@ -21,19 +21,21 @@ from .mistake_memory import MistakeMemory
 
 # Lazy import to avoid loading sentence-transformers unless scoring is needed
 _scorer = None
+_scorer_imported = False
 
 log = logging.getLogger("chatbot.conv_logger")
 
 
 def _get_scorer():
-    global _scorer
-    if _scorer is None:
+    global _scorer, _scorer_imported
+    if not _scorer_imported:
         import sys, os
         eval_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "evaluation"))
         if eval_path not in sys.path:
             sys.path.insert(0, eval_path)
         import scorer as s
         _scorer = s
+        _scorer_imported = True
     return _scorer
 
 # Global singleton for mistake memory (expensive to reload model)
@@ -44,6 +46,13 @@ def _get_mistake_memory() -> MistakeMemory:
     if _MISTAKE_MEM is None:
         _MISTAKE_MEM = MistakeMemory()
     return _MISTAKE_MEM
+
+
+def warmup():
+    """Pre-load all expensive modules at startup to avoid first-request latency."""
+    _get_scorer()
+    _get_mistake_memory()
+    log.info("[ConvLogger] Scorer and MistakeMemory warmed up.")
 
 
 # ── Core logger ───────────────────────────────────────────────────────────────

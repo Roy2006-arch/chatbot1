@@ -35,7 +35,7 @@ from backend.compression_middleware import StrictCompressionMiddleware
 from backend.shared_resources import set_request_cache, get_request_cache, RequestEmbeddingCache
 from backend.realtime_utils import realtime_handler
 from backend.url_verifier import URLVerifier
-from feedback import init_db, log_turn, new_conv_id, router as feedback_router
+from feedback import init_db, log_turn, new_conv_id, conv_logger_warmup, router as feedback_router
 from feedback.mistake_memory import MistakeMemory
 from feedback.auto_improve import start_auto_improve_scheduler, stop_auto_improve_scheduler
 from multimodal.chat_integration import router as multimodal_router
@@ -52,14 +52,19 @@ def get_cpu_pool() -> ProcessPoolExecutor:
     return _CPU_POOL
 
 async def _warmup_inference():
-    """Run a minimal warm-up inference to eliminate first-request latency."""
+    """Run warm-up inference to prime vLLM workers/CUDA kernels at startup."""
     try:
         logger.info("[WarmUp] Starting warm-up inference...")
-        warmup_prompt = "Hello"
+        # Use a realistic prompt to trigger all CUDA kernel configurations
+        warmup_messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello, please help me with a quick question."},
+        ]
+        warmup_prompt = _format_prompt(tokenizer, warmup_messages, MODE)
         async for _ in inference_manager.generate_stream(
             prompt=warmup_prompt,
             request_id="warmup",
-            sampling_kwargs={"max_new_tokens": 1, "temperature": 0.0, "top_p": 1.0},
+            sampling_kwargs={"max_new_tokens": 5, "temperature": 0.0, "top_p": 1.0},
         ):
             pass
         logger.info("[WarmUp] Warm-up complete.")
@@ -73,12 +78,11 @@ async def lifespan(app: FastAPI):
     init_db()
     await lifecycle_manager.start()
 
-    # Eagerly initialize all lazy components to avoid cold-start delays.
+    # ── Eagerly initialize all lazy components to avoid cold-start delays ──
+
+    # Fast in-memory structures
     get_cpu_pool()
     logger.info("[Startup] ProcessPoolExecutor initialized.")
-
-    get_mistake_memory()
-    logger.info("[Startup] MistakeMemory initialized.")
 
     from backend.context_manager import get_system_identity
     get_system_identity()
@@ -87,18 +91,34 @@ async def lifespan(app: FastAPI):
     ReasoningPipeline._get_coding_classifier()
     logger.info("[Startup] CodingIntentClassifier loaded.")
 
+    # MistakeMemory (loads shared embedder)
+    get_mistake_memory()
+    logger.info("[Startup] MistakeMemory initialized.")
+
+    # Conversation logger scorer + second MistakeMemory (major first-request cost)
+    conv_logger_warmup()
+    logger.info("[Startup] Conversation logger scorer & MistakeMemory warmed.")
+
+    # Pre-warm response cache
+    response_cache.set("__warmup__", "__warmup__", "")
+    logger.info("[Startup] Response cache warmed.")
+
+    # Cross-encoder reranker for RAG (heavy model load ~80MB)
     try:
         retriever._get_reranker()
         logger.info("[Startup] Cross-encoder reranker loaded.")
     except Exception as e:
         logger.warning("[Startup] Cross-encoder reranker load skipped: %s", e)
 
-    # Warm-up vLLM to eliminate first-inference CUDA/kernel overhead
-    await _warmup_inference()
+    # aiohttp ClientSession for URL verification
+    try:
+        await url_verifier.warmup()
+        logger.info("[Startup] URL verifier session created.")
+    except Exception as e:
+        logger.warning("[Startup] URL verifier warmup skipped: %s", e)
 
-    # Pre-warm response cache with a no-op entry to initialize cache structures
-    response_cache.set("__warmup__", "__warmup__", "")
-    logger.info("[Startup] Response cache warmed.")
+    # vLLM warm-up inference (primes CUDA/kernel compilation)
+    await _warmup_inference()
 
     # Start auto-improve scheduler (checks feedback.db hourly)
     _auto_scheduler = start_auto_improve_scheduler(

@@ -8,7 +8,7 @@ Import from here in backend/main.py:
 """
 
 from .db_schema          import init_db
-from .conversation_logger import log_turn, new_conv_id
+from .conversation_logger import log_turn, new_conv_id, warmup as conv_logger_warmup
 from .feedback_store      import record_feedback, feedback_summary
 from .api_routes          import router
 

@@ -103,6 +103,11 @@ class URLVerifier:
             )
         return self._session
 
+    async def warmup(self):
+        """Pre-create the aiohttp session at startup."""
+        await self.get_or_create_session()
+        logger.info("[URLVerifier] Session created.")
+
     async def close(self):
         if self._session:
             await self._session.close()
