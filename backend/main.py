@@ -9,7 +9,7 @@ import sys
 import time
 import uuid
 from collections import OrderedDict
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Form, UploadFile, File
@@ -43,12 +43,12 @@ from multimodal.chat_integration import router as multimodal_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chatbot.main")
 
-_CPU_POOL: ProcessPoolExecutor | None = None
+_CPU_POOL: ThreadPoolExecutor | None = None
 
-def get_cpu_pool() -> ProcessPoolExecutor:
+def get_cpu_pool() -> ThreadPoolExecutor:
     global _CPU_POOL
     if _CPU_POOL is None:
-        _CPU_POOL = ProcessPoolExecutor(max_workers=max(4, os.cpu_count() or 4))
+        _CPU_POOL = ThreadPoolExecutor(max_workers=max(4, os.cpu_count() or 4))
     return _CPU_POOL
 
 async def _warmup_inference():
@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
 
     # Fast in-memory structures
     get_cpu_pool()
-    logger.info("[Startup] ProcessPoolExecutor initialized.")
+    logger.info("[Startup] ThreadPoolExecutor initialized.")
 
     from backend.context_manager import get_system_identity
     get_system_identity()
