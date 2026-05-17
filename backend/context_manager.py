@@ -102,7 +102,7 @@ class ContextManager:
                 self._compress_window(state)
 
         if role == "user":
-            self._index_episodic(state, content)
+            threading.Thread(target=self._index_episodic, args=(state, content), daemon=True).start()
 
     def get_messages(
         self,

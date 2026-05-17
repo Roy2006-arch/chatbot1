@@ -294,6 +294,10 @@ async function sendMessage() {
             if (!renderLoopActive) return;
 
             if (tokenQueue.length > 0) {
+                if (typingIndicator && typingIndicator.parentNode) {
+                    typingIndicator.remove();
+                }
+
                 // Pop all tokens to avoid artificial delay
                 let chunk = tokenQueue.splice(0, tokenQueue.length).join('');
                 fullResponse += chunk;
@@ -422,6 +426,9 @@ async function sendMessage() {
         renderLoopActive = false; // stop queue processing
 
         // Final render cleanup
+        if (typingIndicator && typingIndicator.parentNode) {
+            typingIndicator.remove();
+        }
         aiContent.innerHTML = renderMarkdownStream(fullResponse, true);
         chatMessages.scrollTop = chatMessages.scrollHeight;
 

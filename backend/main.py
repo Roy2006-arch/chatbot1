@@ -494,22 +494,22 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         realtime_response = realtime_handler.handle(request.message, request.session_id)
         if realtime_response:
             logger.info("[FastPath] Realtime response for session=%s", request.session_id)
-            await asyncio.to_thread(
+            asyncio.create_task(asyncio.to_thread(
                 log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=0,
                 role="user", content=request.message, model_name=MODEL_NAME,
-            )
+            ))
             await asyncio.to_thread(
                 memory_manager.add_message, request.session_id, "user", request.message
             )
             await asyncio.to_thread(
                 memory_manager.add_message, request.session_id, "assistant", realtime_response
             )
-            await asyncio.to_thread(
+            asyncio.create_task(asyncio.to_thread(
                 log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
                 role="assistant", content=realtime_response, model_name=MODEL_NAME,
                 prompt=request.message, ttft_seconds=0.0,
                 total_time_seconds=time.time() - turn_start,
-            )
+            ))
             orchestrator.reset_session(request.session_id)
 
             _cleanup_request_cache()
@@ -524,22 +524,22 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         greeting_response = _get_greeting_response(request.message)
         if greeting_response:
             logger.info("[FastPath] Greeting for session=%s", request.session_id)
-            await asyncio.to_thread(
+            asyncio.create_task(asyncio.to_thread(
                 log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=0,
                 role="user", content=request.message, model_name=MODEL_NAME,
-            )
+            ))
             await asyncio.to_thread(
                 memory_manager.add_message, request.session_id, "user", request.message
             )
             await asyncio.to_thread(
                 memory_manager.add_message, request.session_id, "assistant", greeting_response
             )
-            await asyncio.to_thread(
+            asyncio.create_task(asyncio.to_thread(
                 log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
                 role="assistant", content=greeting_response, model_name=MODEL_NAME,
                 prompt=request.message, ttft_seconds=0.0,
                 total_time_seconds=time.time() - turn_start,
-            )
+            ))
             orchestrator.reset_session(request.session_id)
 
             _cleanup_request_cache()
@@ -560,16 +560,16 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             await asyncio.to_thread(
                 memory_manager.add_message, request.session_id, "assistant", cached_response
             )
-            await asyncio.to_thread(
+            asyncio.create_task(asyncio.to_thread(
                 log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=0,
                 role="user", content=request.message, model_name=MODEL_NAME,
-            )
-            await asyncio.to_thread(
+            ))
+            asyncio.create_task(asyncio.to_thread(
                 log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
                 role="assistant", content=cached_response, model_name=MODEL_NAME,
                 prompt=request.message, ttft_seconds=0.0,
                 total_time_seconds=time.time() - turn_start,
-            )
+            ))
             orchestrator.reset_session(request.session_id)
 
             _cleanup_request_cache()
@@ -586,7 +586,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     orchestrator.transition(request.session_id, ResponseLifecycle.INIT)
 
     if not request.is_continuation:
-        await asyncio.to_thread(
+        asyncio.create_task(asyncio.to_thread(
             log_turn,
             conv_id=conv_id,
             session_id=request.session_id,
@@ -594,7 +594,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             role="user",
             content=request.message,
             model_name=MODEL_NAME,
-        )
+        ))
         await asyncio.to_thread(
             memory_manager.add_message, request.session_id, "user", request.message
         )
@@ -848,7 +848,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 
         total_elapsed = time.time() - turn_start
         ttft = first_token_time[0] if first_token_time else 0.0
-        await asyncio.to_thread(
+        asyncio.create_task(asyncio.to_thread(
             log_turn,
             conv_id=conv_id,
             session_id=request.session_id,
@@ -859,7 +859,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             prompt=request.message,
             ttft_seconds=ttft,
             total_time_seconds=total_elapsed,
-        )
+        ))
 
         retry_count = 0
         if is_simple:
