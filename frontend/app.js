@@ -288,21 +288,22 @@ async function sendMessage() {
         // Token queue for smooth typing
         let tokenQueue = [];
         let renderLoopActive = true;
+        let lastRenderTime = 0;
 
-        const processQueue = () => {
+        const processQueue = (timestamp) => {
             if (!renderLoopActive) return;
 
             if (tokenQueue.length > 0) {
-                let tokensToPop = 1;
-                if (tokenQueue.length > 100) tokensToPop = Math.ceil(tokenQueue.length / 5);
-                else if (tokenQueue.length > 20) tokensToPop = 5;
-                else if (tokenQueue.length > 5) tokensToPop = 2;
-                
-                let chunk = tokenQueue.splice(0, tokensToPop).join('');
+                // Pop all tokens to avoid artificial delay
+                let chunk = tokenQueue.splice(0, tokenQueue.length).join('');
                 fullResponse += chunk;
                 
-                aiContent.innerHTML = renderMarkdownStream(fullResponse, false);
-                chatMessages.scrollTop = chatMessages.scrollHeight;
+                // Throttle expensive Markdown/Highlighting rendering to 15fps (~66ms)
+                if (timestamp - lastRenderTime > 66) {
+                    aiContent.innerHTML = renderMarkdownStream(fullResponse, false);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                    lastRenderTime = timestamp;
+                }
             }
             
             if (renderLoopActive) {
