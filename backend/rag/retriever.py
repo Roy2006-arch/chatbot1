@@ -79,6 +79,7 @@ class RAGRetriever:
         self._embedder        = knowledge_base._embedder
         self._reranker        = None # Lazy load
         self._cache           = None # Lazy resolve per-request embedding cache
+        self.mistake_memory   = MistakeMemory()
 
     def _cached_encode(self, texts, **kwargs):
         cache = get_request_cache()
@@ -86,9 +87,6 @@ class RAGRetriever:
             return cache.encode(self._embedder, texts, **kwargs)
         return self._embedder.encode(texts, **kwargs)
 
-    # Long-term Learning: Mistake Memory
-        self.mistake_memory   = MistakeMemory()
-        
     def _get_reranker(self):
         if self._reranker is None:
             logger.info("[RAGRetriever] Loading cross-encoder...")

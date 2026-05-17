@@ -51,11 +51,54 @@ def get_cpu_pool() -> ProcessPoolExecutor:
         _CPU_POOL = ProcessPoolExecutor(max_workers=max(4, os.cpu_count() or 4))
     return _CPU_POOL
 
+async def _warmup_inference():
+    """Run a minimal warm-up inference to eliminate first-request latency."""
+    try:
+        logger.info("[WarmUp] Starting warm-up inference...")
+        warmup_prompt = "Hello"
+        async for _ in inference_manager.generate_stream(
+            prompt=warmup_prompt,
+            request_id="warmup",
+            sampling_kwargs={"max_new_tokens": 1, "temperature": 0.0, "top_p": 1.0},
+        ):
+            pass
+        logger.info("[WarmUp] Warm-up complete.")
+    except Exception as e:
+        logger.warning("[WarmUp] Warm-up skipped or failed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     init_db()
     await lifecycle_manager.start()
+
+    # Eagerly initialize all lazy components to avoid cold-start delays.
+    get_cpu_pool()
+    logger.info("[Startup] ProcessPoolExecutor initialized.")
+
+    get_mistake_memory()
+    logger.info("[Startup] MistakeMemory initialized.")
+
+    from backend.context_manager import get_system_identity
+    get_system_identity()
+    logger.info("[Startup] System prompt loaded.")
+
+    ReasoningPipeline._get_coding_classifier()
+    logger.info("[Startup] CodingIntentClassifier loaded.")
+
+    try:
+        retriever._get_reranker()
+        logger.info("[Startup] Cross-encoder reranker loaded.")
+    except Exception as e:
+        logger.warning("[Startup] Cross-encoder reranker load skipped: %s", e)
+
+    # Warm-up vLLM to eliminate first-inference CUDA/kernel overhead
+    await _warmup_inference()
+
+    # Pre-warm response cache with a no-op entry to initialize cache structures
+    response_cache.set("__warmup__", "__warmup__", "")
+    logger.info("[Startup] Response cache warmed.")
 
     # Start auto-improve scheduler (checks feedback.db hourly)
     _auto_scheduler = start_auto_improve_scheduler(
@@ -65,6 +108,8 @@ async def lifespan(app: FastAPI):
     )
     if _auto_scheduler:
         logger.info("[Main] Auto-improve scheduler started.")
+
+    logger.info("[Startup] All cold-start initialization complete.")
 
     yield
 
@@ -121,6 +166,12 @@ MODELS = {
 }
 MODEL_NAME = MODELS.get(MODE, "gpt2")
 
+logger.info("Loading tokenizer for %s...", MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+logger.info("Tokenizer loaded for %s", MODEL_NAME)
+
 logger.info("Initializing vLLM with %s...", MODEL_NAME)
 inference_manager = InferenceManager(
     model_name=MODEL_NAME,
@@ -128,11 +179,6 @@ inference_manager = InferenceManager(
     gpu_memory_utilization=0.85,
     max_model_len=4096,
 )
-
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
-logger.info("Tokenizer loaded for %s", MODEL_NAME)
 
 memory_manager = ContextManager(
     window_size=10,
@@ -415,6 +461,12 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     if request.timezone:
         realtime_handler.set_user_timezone(request.session_id, request.timezone)
 
+    def _cleanup_request_cache():
+        cache = get_request_cache()
+        if cache:
+            cache.clear()
+        set_request_cache(None)
+
     # Fast-path realtime check - highest priority, no LLM needed
     if not request.is_continuation:
         realtime_response = realtime_handler.handle(request.message, request.session_id)
@@ -510,12 +562,6 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     set_request_cache(request_cache)
     first_token_time: list[float] = []
     orchestrator.transition(request.session_id, ResponseLifecycle.INIT)
-
-    def _cleanup_request_cache():
-        cache = get_request_cache()
-        if cache:
-            cache.clear()
-        set_request_cache(None)
 
     if not request.is_continuation:
         await asyncio.to_thread(
