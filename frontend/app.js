@@ -3,7 +3,8 @@ marked.use({
     renderer: {
         code(code, language) {
             const validLang = language && hljs.getLanguage(language) ? language : 'plaintext';
-            const highlighted = validLang === 'plaintext' ? hljs.highlightAuto(code).value : hljs.highlight(code, { language: validLang }).value;
+            const escapeHtml = (unsafe) => unsafe.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+            const highlighted = validLang === 'plaintext' ? escapeHtml(code) : hljs.highlight(code, { language: validLang }).value;
             
             return `
 <div class="code-block-wrapper">

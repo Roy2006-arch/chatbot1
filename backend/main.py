@@ -865,7 +865,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         if is_simple:
             orchestrator.transition(request.session_id, ResponseLifecycle.FINALIZED)
         else:
-            validation = orchestrator.validate_and_finalize(request.session_id)
+            validation = await asyncio.to_thread(orchestrator.validate_and_finalize, request.session_id)
             if not validation["is_valid"] and validation["repair_suffix"]:
                 yield f"data: {json.dumps({'content': validation['repair_suffix'], 'repaired': True, 'conv_id': conv_id})}\n\n"
 
@@ -920,7 +920,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                     logger.error("Continuation stream timed out for %s", request_id)
                 await cont_task
 
-                validation = orchestrator.validate_and_finalize(request.session_id)
+                validation = await asyncio.to_thread(orchestrator.validate_and_finalize, request.session_id)
                 if not validation["is_valid"] and validation["repair_suffix"]:
                     yield f"data: {json.dumps({'content': validation['repair_suffix'], 'repaired': True, 'conv_id': conv_id})}\n\n"
 
