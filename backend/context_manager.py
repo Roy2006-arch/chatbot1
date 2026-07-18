@@ -39,12 +39,19 @@ CHARS_PER_TOKEN: int = 4
 
 _KI_PATTERNS: List[Tuple[str, re.Pattern]] = [
     ("name",       re.compile(r"\bmy name is ([A-Z][a-z]+(?: [A-Z][a-z]+)*)", re.I)),
-    ("name",       re.compile(r"\bcall me ([A-Z][a-z]+)", re.I)),
-    ("location",   re.compile(r"\bI(?:'m| am) (?:from|in|at|based in) ([\w\s,]+?)(?:\.|,|$)", re.I)),
-    ("language",   re.compile(r"\bI(?:'m| am) (?:learning|using|coding in) ([\w+#]+)", re.I)),
-    ("preference", re.compile(r"\bI (?:prefer|like|love|hate|dislike|want) ([\w\s]+?)(?:\.|,|$)", re.I)),
-    ("goal",       re.compile(r"\bI(?:'m| am) (?:trying|working|building|creating|making) ([\w\s]+?)(?:\.|,|$)", re.I)),
-    ("context",    re.compile(r"\bmy (?:project|app|system|bot|model) (?:is|uses) ([\w\s]+?)(?:\.|,|$)", re.I)),
+    ("name",       re.compile(r"\bcall me ([A-Z][a-z]+(?:\.?\s+[A-Z][a-z]+)*)", re.I)),
+    ("name",       re.compile(r"\bi(?:'m| am) ([A-Z][a-z]+)\b", re.I)),
+    ("location",   re.compile(r"\bI(?:'m| am) (?:from|in|at|based in|located in) ([\w\s,]+?)(?:\.|,|$)", re.I)),
+    ("location",   re.compile(r"\bI live in ([\w\s,]+?)(?:\.|,|$)", re.I)),
+    ("language",   re.compile(r"\bI(?:'m| am) (?:learning|using|coding in|working with) ([\w+#]+)", re.I)),
+    ("language",   re.compile(r"\b(?:my |the )(?:primary |main |favorite )?(?:programming )?language is ([\w+#]+)", re.I)),
+    ("preference", re.compile(r"\bI (?:prefer|like|love|enjoy|favor) ([\w\s]+?)(?:\.|,|$)", re.I)),
+    ("dislike",    re.compile(r"\bI (?:hate|dislike|despise|can'?t stand|don'?t like) ([\w\s]+?)(?:\.|,|$)", re.I)),
+    ("goal",       re.compile(r"\bI(?:'m| am) (?:trying|working|building|creating|making|learning|studying|preparing) ([\w\s]+?)(?:\.|,|$)", re.I)),
+    ("context",    re.compile(r"\bmy (?:project|app|system|bot|model|code|codebase|repository|repo) (?:is|uses|runs on|built with) ([\w\s]+?)(?:\.|,|$)", re.I)),
+    ("role",       re.compile(r"\bI(?:'m| am) (?:a |an )?(?:student|developer|engineer|programmer|designer|manager|analyst|scientist|researcher|teacher|professor|freelancer|founder|ceo|cto|pm)\b", re.I)),
+    ("experience", re.compile(r"\bI(?:'ve| have) (\d+) (?:years?|yrs?) (?:of )?(?:experience|exp|in)\b", re.I)),
+    ("tech_stack", re.compile(r"\b(?:using|with|built with|stack:?) (python|javascript|typescript|java|c\+\+|go|rust|ruby|php|swift|kotlin|react|vue|angular|node|django|flask|fastapi|spring|rails)\b", re.I)),
 ]
 
 
@@ -269,12 +276,11 @@ class ContextManager:
             text = msg["content"].strip()
 
             if role == "user":
-                user_text = text[:200] + ("..." if len(text) > 200 else "")
-                # Try to pair with the following assistant response
+                user_text = text[:300] + ("..." if len(text) > 300 else "")
                 if i + 1 < len(turns) and turns[i + 1]["role"] == "assistant":
                     asst_text = turns[i + 1]["content"].strip()
                     first_sent = re.split(r"(?<=[.!?])\s+", asst_text, maxsplit=1)[0]
-                    first_sent = first_sent[:180] + ("..." if len(first_sent) > 180 else "")
+                    first_sent = first_sent[:250] + ("..." if len(first_sent) > 250 else "")
                     lines.append(f"- User asked about: {user_text}. Response covered: {first_sent}")
                     i += 2
                     continue
@@ -282,7 +288,7 @@ class ContextManager:
                     lines.append(f"- User asked: {user_text}")
             elif role == "assistant":
                 first_sent = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
-                first_sent = first_sent[:180] + ("..." if len(first_sent) > 180 else "")
+                first_sent = first_sent[:250] + ("..." if len(first_sent) > 250 else "")
                 lines.append(f"- Assistant responded: {first_sent}")
             i += 1
 
@@ -293,8 +299,7 @@ class ContextManager:
         when the combined length exceeds the budget.
         """
         combined_lines = old.strip().split("\n") + new.strip().split("\n")
-        # Keep dropping the oldest lines until we fit
-        while len("\n".join(combined_lines)) > 1800 and len(combined_lines) > 2:
+        while len("\n".join(combined_lines)) > 2400 and len(combined_lines) > 2:
             combined_lines.pop(0)
         return "\n".join(combined_lines)
 

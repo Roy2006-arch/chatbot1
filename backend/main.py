@@ -238,9 +238,9 @@ inference_manager = InferenceManager(
 )
 
 memory_manager = ContextManager(
-    window_size=10,
-    summarize_after=16,
-    max_tokens_budget=3072,
+    window_size=12,
+    summarize_after=18,
+    max_tokens_budget=3500,
     dedup_threshold=0.92,
 )
 doc_processor = DocumentProcessor()

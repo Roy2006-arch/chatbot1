@@ -36,14 +36,27 @@ class ReasoningTrace:
 
 class IntentClassifier:
     _PATTERNS: list[tuple[str, str]] = [
-        (r"\b(hello|hi|hey|good morning|good evening|howdy|greetings|sup|yo)\b", "casual_chat"),
-        (r"\b(debug|fix the bug|traceback|stack trace|exception|why is this failing|not working as expected|diagnose|runtime error|syntax error)\b", "debugging"),
-        (r"\b(architecture|design|structure|system design|scalability|blueprint|infrastructure)\b", "architecture"),
-        (r"\b(optimize|make it faster|performance|efficient|bottleneck|refactor)\b", "optimization"),
-        (r"\b(explain|how does|what is|define|clarify|elaborate|walk me through)\b", "explanation"),
-        (r"\b(solve|implement|write code|code for|function|class|program|challenge|problem)\b", "coding_problem"),
-        (r"\b(document|pdf|file|read this|search in|find in document)\b", "document_query"),
-        (r"\b(what time is it|current time|today'?s date|what'?s the date|current date|what day is|time in |timestamp)\b", "realtime_query"),
+        (r"\b(hello|hi|hey|good morning|good evening|howdy|greetings|sup|yo|bonjour|salut|hola|namaste|salaam|konnichiwa|hallo|ciao|olá|merhaba|annyeong)\b", "casual_chat"),
+        (r"\b(debug|fix the bug|traceback|stack trace|exception|why is this failing|not working as expected|diagnose|runtime error|syntax error|error in|bug in|crash|segfault|segmentation fault|typeerror|valueerror|keyerror|indexerror|nameerror|attributeerror|importerror|oserror|permissionerror|timeouterror|connectionerror|recursionerror|overflowerror)\b", "debugging"),
+        (r"\b(architecture|design|structure|system design|scalability|blueprint|infrastructure|microservice|monolith|distributed|load balancer|cdn|message queue|event.?driven|service.?mesh)\b", "architecture"),
+        (r"\b(optimize|make it faster|performance|efficient|bottleneck|refactor|speed up|latency|throughput|caching|memoize|parallel|concurrent|async|batch|lazy.?load|pagination)\b", "optimization"),
+        (r"\b(explain|how does|what is|what are|define|clarify|elaborate|walk me through|describe|tell me about|what do you mean|can you explain|help me understand|what's the difference between|compare|contrast|pros and cons|advantages|disadvantages)\b", "explanation"),
+        (r"\b(solve|implement|write code|code for|function|class|program|challenge|problem|algorithm|data structure|sort|search|traverse|iterate|recursion|dynamic programming|greedy|backtrack)\b", "coding_problem"),
+        (r"\b(document|pdf|file|read this|search in|find in document|uploaded|attachment|parse|extract from)\b", "document_query"),
+        (r"\b(what time is it|current time|today'?s date|what'?s the date|current date|what day is|time in |timestamp|what year|what month|what season|how old|age of)\b", "realtime_query"),
+        (r"\b(translate|traduire|übersetzen|traducir|tradurre|翻訳する|번역)\b", "explanation"),
+        (r"\b(email|write.*email|draft.*email|compose.*message|letter|professional.*message|business.*correspondence|formal.*request)\b", "general"),
+        (r"\b(creative|story|poem|haiku|sonnet|limerick|narrative|fiction|write.*story|tale|fable|legend)\b", "general"),
+        (r"\b(math|calculate|compute|solve.*equation|integral|derivative|matrix|linear algebra|probability|statistics|factorial|fibonacci)\b", "explanation"),
+        (r"\b(plan|roadmap|strategy|step.?by.?step|guide|tutorial|how to|instructions|checklist|workflow|process|procedure)\b", "general"),
+        (r"\b(review|critique|feedback|improve|suggest|recommend|best practice|code review|refactor|smell)\b", "optimization"),
+        (r"\b(api|endpoint|rest|graphql|webhook|oauth|jwt|authentication|authorization|middleware|route|request|response)\b", "coding_problem"),
+        (r"\b(database|sql|query|table|index|join|aggregate|migration|schema|normalize|denormalize|transaction|acid|nosql|mongodb|redis|postgresql|mysql|sqlite)\b", "coding_problem"),
+        (r"\b(deploy|docker|kubernetes|k8s|ci.?cd|pipeline|aws|azure|gcp|cloud|serverless|lambda|ec2|s3|terraform|ansible|jenkins|github.actions)\b", "coding_problem"),
+        (r"\b(test|unittest|pytest|jest|mocha|testing|tdd|bdd|mock|stub|integration test|e2e|coverage|assertion)\b", "coding_problem"),
+        (r"\b(rewrite|rephrase|paraphrase|fix grammar|correct|edit|proofread|improve.*writing|simplify|make.*clearer)\b", "general"),
+        (r"\b(summarize|summarise|tldr|short version|brief|key points|main ideas|overview|condense)\b", "general"),
+        (r"\b(compare|vs|versus|differ|区别|比較)\b", "explanation"),
     ]
 
     def classify(self, message: str) -> tuple[str, str]:
@@ -57,6 +70,8 @@ class IntentClassifier:
                 r"\bpublic static void", r"\bSystem\.out",
                 r"#include\s*<", r"\bstd::",
                 r"SELECT .* FROM", r"UPDATE .* SET",
+                r"INSERT INTO", r"CREATE TABLE", r"ALTER TABLE",
+                r"FROM.*WHERE", r"JOIN.*ON",
             ]
             has_code = any(re.search(p, message, re.IGNORECASE) for p in code_signatures)
 
@@ -75,8 +90,8 @@ class IntentClassifier:
 
 class InternalPlanner:
     _DEPTH_INDICATORS = {
-        "beginner": r"\b(beginner|basic|simple|eli5|easy|start|introduction|learn)\b",
-        "advanced": r"\b(advanced|complex|deep dive|professional|expert|senior|optimized|high performance)\b",
+        "beginner": r"\b(beginner|basic|simple|eli5|easy|start|introduction|learn|for a child|to a kid|like I'?m 5|newbie|first.?time|no.?experience|from scratch|step by step|explain like|in plain english|what is.*in simple|like I know nothing|absolute beginner|just starting)\b",
+        "advanced": r"\b(advanced|complex|deep dive|professional|expert|senior|optimized|high performance|interview|competitive|production.?grade|enterprise|at scale|distributed|concurrent|parallel|lock.?free|wait.?free|lockless|cache.?friendly|branchless|simd|avx|gpu|cuda|kernel|bare.?metal|low.?level|systems.?level|micro.?optimization|nanosecond|microsecond|throughput|maximize|benchmark|stress.?test|load.?test|chaos.?engineering)\b",
     }
 
     _TEMPLATES: dict[str, list[str]] = {
@@ -85,41 +100,57 @@ class InternalPlanner:
             "Identify required output structure: Approach -> Code -> Complexity.",
             "Determine reasoning strategy: Algorithmic decomposition and complexity analysis.",
             "Generate structured draft response with complete compilable code.",
+            "Verify edge cases: empty input, single element, large input, duplicates.",
+            "State time and space complexity explicitly.",
             "Strictly follow the MANDATORY RESPONSE FORMAT.",
         ],
         "debugging": [
             "Provide a concrete fix with corrected code.",
             "Validate syntax internally.",
+            "Explain the root cause clearly.",
+            "Show before/after code comparison if helpful.",
+            "Mention any related issues the user should watch for.",
         ],
         "explanation": [
             "Break down the concept or code step by step.",
             "Improve clarity and technical precision.",
+            "Use concrete examples or analogies where helpful.",
             "Avoid rewriting code unless necessary.",
+            "Match explanation depth to the user's technical level.",
         ],
         "architecture": [
             "Identify high-level components and their interactions.",
             "Evaluate scalability and maintainability.",
+            "Discuss trade-offs between approaches.",
             "Provide structured design suggestions.",
+            "Consider security, performance, and operational concerns.",
         ],
         "optimization": [
             "Identify performance bottlenecks.",
             "Suggest algorithmic or structural improvements.",
             "Explain the trade-offs clearly.",
+            "Provide before/after complexity comparison.",
+            "Prioritize changes by impact vs. effort.",
         ],
         "casual_chat": [
             "Respond in 1-2 short sentences.",
             "Be conversational, not formal.",
             "No letters, no closings, no sign-offs.",
+            "Match the user's energy and tone.",
         ],
         "document_query": [
             "Retrieve relevant context from documents.",
             "Ground claims in retrieved context.",
             "Summarize findings accurately.",
+            "Cite specific sections when possible.",
+            "Flag if the document doesn't contain the answer.",
         ],
         "general": [
             "Understand the core request.",
             "Identify reasoning strategy.",
             "Provide a structured, complete response.",
+            "Match response length to question complexity.",
+            "Use formatting (headers, lists, code blocks) for clarity.",
         ],
     }
 
@@ -180,7 +211,7 @@ class PromptAugmenter:
 
 class ResponseRewriter:
     _ROBOTIC_PHRASES = [
-        (re.compile(r'As an AI(?: assistant|language model)?[,.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'As an AI(?: assistant| language model)?[,.]?\s*', re.IGNORECASE), ''),
         (re.compile(r'I would be delighted to[,.]?\s*', re.IGNORECASE), ''),
         (re.compile(r'Certainly(?:! Here are several options\.\.\.|[,!])\s*', re.IGNORECASE), ''),
         (re.compile(r'Based on your query[,.]?\s*', re.IGNORECASE), ''),
@@ -193,6 +224,28 @@ class ResponseRewriter:
         (re.compile(r'(?:Please )?(?:feel free|don\'t hesitate) to (?:ask|reach out|let me know)[^.]*[!.]?\s*', re.IGNORECASE), ''),
         (re.compile(r'(?:It\'s|It is) a (?:pleasure|great) to (?:assist|help)[^.]*[!.]?\s*', re.IGNORECASE), ''),
         (re.compile(r'(?:Greetings|Salutations)[!.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'Sure thing[,!]\s*', re.IGNORECASE), ''),
+        (re.compile(r'Happy to help[,!]\s*', re.IGNORECASE), ''),
+        (re.compile(r'Let me help you with that[,.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'I\'d be happy to assist you with that[,.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'Here\'s what I can tell you[,:]\s*', re.IGNORECASE), ''),
+        (re.compile(r'Here\'s the thing[:]\s*', re.IGNORECASE), ''),
+        (re.compile(r'Look,?\s+', re.IGNORECASE), ''),
+        (re.compile(r'Well,?\s+(?:first of all|let me|here\'s)\s+', re.IGNORECASE), ''),
+        (re.compile(r'(?:In )?[Ss]ummary,?\s+', re.IGNORECASE), ''),
+        (re.compile(r'To (?:sum up|summarize|conclude)[,:]\s*', re.IGNORECASE), ''),
+        (re.compile(r'(?:In |To )?(?:conclusion|essence|summary)[,:]\s*', re.IGNORECASE), ''),
+        (re.compile(r'Did you know that\s+', re.IGNORECASE), ''),
+        (re.compile(r'Interestingly[,.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'Fun fact[:]\s*', re.IGNORECASE), ''),
+        (re.compile(r'(?:Basically|Essentially|Simply put)[,]\s*', re.IGNORECASE), ''),
+        (re.compile(r'(?:In other words,?\s*)', re.IGNORECASE), ''),
+        (re.compile(r'The (?:short |quick )?answer is[:]\s*', re.IGNORECASE), ''),
+        (re.compile(r'Okay,?\s+', re.IGNORECASE), ''),
+        (re.compile(r'Right,?\s+', re.IGNORECASE), ''),
+        (re.compile(r'So,?\s+(?:basically|essentially|in short)\s+', re.IGNORECASE), ''),
+        (re.compile(r'(?:Don\'t worry|No worries)[,.]?\s*', re.IGNORECASE), ''),
+        (re.compile(r'(?:There\'s no need to worry|It\'s okay)[,.]?\s*', re.IGNORECASE), ''),
     ]
 
     def rewrite(self, response: str, trace: ReasoningTrace, issues: list[str]) -> str:

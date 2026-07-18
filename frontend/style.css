@@ -326,3 +326,102 @@ textarea::placeholder {
     border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+/* Header Actions */
+.header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+/* Copy Message Button */
+.copy-message-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 0.2s, color 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ai-message {
+    position: relative;
+}
+
+.ai-message:hover .copy-message-btn {
+    opacity: 1;
+}
+
+.copy-message-btn:hover {
+    color: var(--text-primary);
+}
+
+/* Message hover effects */
+.ai-message:hover {
+    background-color: var(--user-bg);
+}
+
+/* Responsive improvements */
+@media (max-width: 768px) {
+    .message {
+        padding: 16px;
+        gap: 12px;
+    }
+    
+    .avatar {
+        width: 26px;
+        height: 26px;
+    }
+    
+    .code-block-header {
+        padding: 6px 12px;
+    }
+    
+    .code-block-wrapper pre {
+        padding: 12px;
+    }
+}
+
+/* Better focus styles */
+.icon-btn:focus-visible {
+    outline: 2px solid var(--input-focus);
+    outline-offset: 2px;
+}
+
+/* Loading state for send button */
+.send-btn.loading {
+    pointer-events: none;
+    opacity: 0.7;
+}
+
+/* Smooth transitions for theme toggle */
+body {
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Better code block contrast in light mode */
+[data-theme="light"] .code-block-wrapper {
+    background-color: #f8f9fa;
+    border-color: #e9ecef;
+}
+
+[data-theme="light"] .code-block-header {
+    background-color: #e9ecef;
+    color: #495057;
+}
+
+[data-theme="light"] .copy-btn {
+    color: #495057;
+}
+
+[data-theme="light"] .copy-btn:hover {
+    color: #212529;
+}

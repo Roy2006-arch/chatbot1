@@ -287,10 +287,40 @@ class ResponseValidationEngine:
                 severity="critical",
             ))
 
-        if re.search(r"\bas an ai language model\b|\bi don't have feelings\b", text, re.IGNORECASE):
+        if re.search(r"\bas an ai language model\b|\bi don't have feelings\b|\bi cannot feel\b|\bi am just a\b|\bi am an ai\b", text, re.IGNORECASE):
             issues.append(ValidationIssue(
                 code="robotic_artifact",
                 message="Robotic AI disclaimer detected.",
+                severity="info",
+            ))
+
+        if re.search(r'\b(I\'m not sure|I cannot|I can\'t|I don\'t know)\b', text, re.IGNORECASE):
+            if not re.search(r'\b(I\'m not sure about this specific|I cannot verify|I can\'t confirm|I don\'t have access)\b', text, re.IGNORECASE):
+                issues.append(ValidationIssue(
+                    code="uncertainty_artifact",
+                    message="Excessive uncertainty markers detected. Consider being more direct.",
+                    severity="info",
+                ))
+
+        words = text.split()
+        if len(words) > 3:
+            word_freq = {}
+            for w in words:
+                w_lower = w.lower().strip('.,!?;:()"\'')
+                if len(w_lower) > 3:
+                    word_freq[w_lower] = word_freq.get(w_lower, 0) + 1
+            overused = [w for w, c in word_freq.items() if c > len(words) * 0.08 and c > 3]
+            if overused:
+                issues.append(ValidationIssue(
+                    code="word_repetition",
+                    message=f"Words repeated excessively: {', '.join(overused[:3])}",
+                    severity="info",
+                ))
+
+        if re.search(r'\*\*[^*]+\*\*\s*\*\*[^*]+\*\*', text):
+            issues.append(ValidationIssue(
+                code="excessive_formatting",
+                message="Excessive bold formatting detected.",
                 severity="info",
             ))
 

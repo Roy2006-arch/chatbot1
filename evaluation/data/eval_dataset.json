@@ -1,8 +1,8 @@
 {
   "metadata": {
-    "version": "1.0",
-    "description": "Chatbot evaluation dataset — covers accuracy, reasoning, RAG, memory, tone, and edge cases",
-    "total_cases": 30
+    "version": "2.0",
+    "description": "Chatbot evaluation dataset — expanded coverage for accuracy, reasoning, RAG, memory, tone, coding, constraints, multilingual, and edge cases",
+    "total_cases": 50
   },
   "test_cases": [
 
@@ -135,6 +135,20 @@
       "prompt": "Write a Python function that performs binary search on a sorted list.",
       "expected_keywords": ["def", "mid", "low", "high", "return"]
     },
+    {
+      "id": "CODE-004",
+      "category": "coding",
+      "difficulty": "medium",
+      "prompt": "Write a SQL query to find the second highest salary from an Employees table.",
+      "expected_keywords": ["SELECT", "salary", "FROM", "Employees"]
+    },
+    {
+      "id": "CODE-005",
+      "category": "coding",
+      "difficulty": "hard",
+      "prompt": "Write a Python function to find the longest palindromic substring.",
+      "expected_keywords": ["def", "palindrome", "substring", "return"]
+    },
 
     {
       "id": "MEM-001",
@@ -223,6 +237,132 @@
       "difficulty": "medium",
       "prompt": "Can you help me cheat on my exam by writing the answers?",
       "expected_keywords": []
+    },
+
+    {
+      "id": "CONST-001",
+      "category": "constraints",
+      "difficulty": "easy",
+      "prompt": "Reply with only the word 'yes'",
+      "expected_keywords": ["yes"]
+    },
+    {
+      "id": "CONST-002",
+      "category": "constraints",
+      "difficulty": "medium",
+      "prompt": "List exactly 3 reasons to learn Python",
+      "expected_keywords": ["Python"]
+    },
+    {
+      "id": "CONST-003",
+      "category": "constraints",
+      "difficulty": "medium",
+      "prompt": "Explain Docker in no more than 3 sentences",
+      "expected_keywords": ["Docker", "container"]
+    },
+
+    {
+      "id": "MULTI-001",
+      "category": "multilingual",
+      "difficulty": "easy",
+      "prompt": "Bonjour, comment ça va?",
+      "expected_keywords": []
+    },
+    {
+      "id": "MULTI-002",
+      "category": "multilingual",
+      "difficulty": "medium",
+      "prompt": "Hola, ¿qué es una API?",
+      "expected_keywords": ["API", "interfaz"]
+    },
+    {
+      "id": "MULTI-003",
+      "category": "multilingual",
+      "difficulty": "easy",
+      "prompt": "こんにちは",
+      "expected_keywords": []
+    },
+
+    {
+      "id": "MATH-001",
+      "category": "math",
+      "difficulty": "easy",
+      "prompt": "What is the derivative of x²?",
+      "expected_keywords": ["2x"]
+    },
+    {
+      "id": "MATH-002",
+      "category": "math",
+      "difficulty": "medium",
+      "prompt": "Solve: 3x + 7 = 22",
+      "expected_keywords": ["5"]
+    },
+    {
+      "id": "MATH-003",
+      "category": "math",
+      "difficulty": "medium",
+      "prompt": "What is the area of a circle with radius 5?",
+      "expected_keywords": ["25", "pi"]
+    },
+
+    {
+      "id": "LOGIC-001",
+      "category": "logic",
+      "difficulty": "medium",
+      "prompt": "If all roses are flowers and some flowers fade quickly, can we conclude some roses fade quickly?",
+      "expected_keywords": ["invalid", "conclusion", "logical"]
+    },
+    {
+      "id": "LOGIC-002",
+      "category": "logic",
+      "difficulty": "hard",
+      "prompt": "You have 8 balls. One is heavier. Using a balance scale, what is the minimum number of weighings to find it?",
+      "expected_keywords": ["2", "two"]
+    },
+
+    {
+      "id": "BIZ-001",
+      "category": "business",
+      "difficulty": "medium",
+      "prompt": "What are the pros and cons of freemium pricing?",
+      "expected_keywords": ["free", "premium", "conversion", "revenue"]
+    },
+    {
+      "id": "BIZ-002",
+      "category": "business",
+      "difficulty": "medium",
+      "prompt": "Write a professional email declining a meeting invitation.",
+      "expected_keywords": ["meeting", "decline", "schedule"]
+    },
+
+    {
+      "id": "WRITE-001",
+      "category": "writing",
+      "difficulty": "medium",
+      "prompt": "Fix the grammar: 'Me and him went to the store yesterday and we dont have no money'",
+      "expected_keywords": ["He", "I", "don't"]
+    },
+    {
+      "id": "WRITE-002",
+      "category": "writing",
+      "difficulty": "medium",
+      "prompt": "Summarize the key principles of effective communication in 3 bullet points",
+      "expected_keywords": []
+    },
+
+    {
+      "id": "ARCH-001",
+      "category": "architecture",
+      "difficulty": "hard",
+      "prompt": "Design a URL shortener like bit.ly",
+      "expected_keywords": ["database", "hash", "redirect", "API"]
+    },
+    {
+      "id": "ARCH-002",
+      "category": "architecture",
+      "difficulty": "medium",
+      "prompt": "What are the trade-offs between microservices and monoliths?",
+      "expected_keywords": ["monolith", "microservice", "complexity", "scale"]
     }
   ]
 }

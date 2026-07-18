@@ -36,12 +36,22 @@ function sanitizeHTML(dirty) {
 }
 
 // Global copy function
-window.copyCode = function(button) {
+function copyCode(button) {
     const wrapper = button.closest('.code-block-wrapper');
     const codeEl = wrapper.querySelector('code');
     const text = codeEl.textContent;
     
     navigator.clipboard.writeText(text).then(() => {
+        const originalHTML = button.innerHTML;
+        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!';
+        setTimeout(() => button.innerHTML = originalHTML, 2000);
+    }).catch(() => {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
         const originalHTML = button.innerHTML;
         button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!';
         setTimeout(() => button.innerHTML = originalHTML, 2000);
@@ -121,7 +131,6 @@ function createMessageElement(sender) {
     const messageDiv = document.createElement('div');
     messageDiv.classList.add('message', sender === 'user' ? 'user-message' : 'ai-message');
     
-    // Create Avatar
     const avatar = document.createElement('div');
     avatar.classList.add('avatar', sender === 'user' ? 'user-avatar' : 'ai-avatar');
     if (sender === 'user') {
@@ -133,8 +142,28 @@ function createMessageElement(sender) {
     const contentDiv = document.createElement('div');
     contentDiv.classList.add('message-content');
     
-    messageDiv.appendChild(avatar);
-    messageDiv.appendChild(contentDiv);
+    if (sender === 'ai') {
+        const copyBtn = document.createElement('button');
+        copyBtn.classList.add('copy-message-btn');
+        copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+        copyBtn.title = 'Copy message';
+        copyBtn.addEventListener('click', () => {
+            const text = contentDiv.textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+                setTimeout(() => {
+                    copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+                }, 2000);
+            });
+        });
+        messageDiv.appendChild(avatar);
+        messageDiv.appendChild(contentDiv);
+        messageDiv.appendChild(copyBtn);
+    } else {
+        messageDiv.appendChild(avatar);
+        messageDiv.appendChild(contentDiv);
+    }
+    
     return { messageDiv, contentDiv };
 }
 
@@ -449,10 +478,9 @@ async function sendMessage() {
 
 sendButton.addEventListener('click', sendMessage);
 
-// Handle Enter to send, Shift+Enter for new line, Tab for indentation
 userInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault(); // Prevent default new line
+        e.preventDefault();
         if (!sendButton.disabled) {
             sendMessage();
         }
@@ -462,10 +490,22 @@ userInput.addEventListener('keydown', (e) => {
         const end = e.target.selectionEnd;
         e.target.value = e.target.value.substring(0, start) + "\t" + e.target.value.substring(end);
         e.target.selectionStart = e.target.selectionEnd = start + 1;
-        // Trigger input event to update button state and textarea height
         e.target.dispatchEvent(new Event('input'));
     }
 });
+
+function clearChat() {
+    chatMessages.innerHTML = '';
+    const { messageDiv, contentDiv } = createMessageElement('ai');
+    contentDiv.textContent = 'Hey! How can I help you today?';
+    chatMessages.appendChild(messageDiv);
+    fullResponse = '';
+}
+
+const clearBtn = document.getElementById('clearChat');
+if (clearBtn) {
+    clearBtn.addEventListener('click', clearChat);
+}
 
 // --- Document Upload Logic ---
 uploadButton.addEventListener('click', () => fileInput.click());
