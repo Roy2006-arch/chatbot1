@@ -37,6 +37,8 @@ from backend.compression_middleware import StrictCompressionMiddleware
 from backend.shared_resources import set_request_cache, get_request_cache, RequestEmbeddingCache
 from backend.realtime_utils import realtime_handler
 from backend.url_verifier import URLVerifier
+from backend.web_search import web_search_engine
+from backend.code_executor import execute_code, extract_code_blocks, format_result_for_response
 from backend.prompts import SYSTEM_PROMPT, GREETING_RESPONSES, INTENT_PATTERNS, INTENTS_REQUIRING_RAG, TOKEN_BUDGETS, RECOVERY_PROMPT
 from feedback import init_db, log_turn, new_conv_id, conv_logger_warmup, router as feedback_router
 from feedback.mistake_memory import MistakeMemory
@@ -218,10 +220,10 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 MODE = "best"
 MODELS = {
-    "fast": "Qwen/Qwen2.5-1.5B-Instruct",
-    "best": "Qwen/Qwen2.5-3B-Instruct",
+    "fast": "Qwen/Qwen2.5-3B-Instruct",
+    "best": "Qwen/Qwen2.5-7B-Instruct",
 }
-MODEL_NAME = MODELS.get(MODE, "Qwen/Qwen2.5-3B-Instruct")
+MODEL_NAME = MODELS.get(MODE, "Qwen/Qwen2.5-7B-Instruct")
 
 logger.info("Loading tokenizer for %s...", MODEL_NAME)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -233,8 +235,8 @@ logger.info("Initializing vLLM with %s...", MODEL_NAME)
 inference_manager = InferenceManager(
     model_name=MODEL_NAME,
     tokenizer=tokenizer,
-    gpu_memory_utilization=0.85,
-    max_model_len=4096,
+    gpu_memory_utilization=0.90,
+    max_model_len=8192,
 )
 
 memory_manager = ContextManager(
@@ -286,9 +288,9 @@ app.add_middleware(ReasoningAuditMiddleware, pipeline=reasoning_pipeline)
 # app.add_middleware(StrictCompressionMiddleware)
 
 # INTENTS_REQUIRING_RAG imported from backend.prompts
-MAX_STREAM_SECONDS = 60
+MAX_STREAM_SECONDS = 90
 MAX_AUTORETRY = 3
-MAX_CONTINUATION_NEW_TOKENS = 1024
+MAX_CONTINUATION_NEW_TOKENS = 2048
 
 GREETING_RESPONSES_ORDERED = OrderedDict(sorted(GREETING_RESPONSES.items(), key=lambda x: -len(x[0])))
 
@@ -556,6 +558,48 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                 yield "data: [DONE]\n\n"
             return StreamingResponse(greeting_stream(), media_type="text/event-stream")
 
+    # Fast-path code execution - extract and run code directly
+    if not request.is_continuation and _detect_code_execution_request(request.message):
+        code_blocks = extract_code_blocks(request.message)
+        if not code_blocks:
+            # Try to extract code from the message itself (user pasted code)
+            code_blocks = [request.message]
+
+        if code_blocks:
+            logger.info("[FastPath] Code execution for session=%s", request.session_id)
+            asyncio.create_task(asyncio.to_thread(
+                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=0,
+                role="user", content=request.message, model_name=MODEL_NAME,
+            ))
+            await asyncio.to_thread(
+                memory_manager.add_message, request.session_id, "user", request.message
+            )
+
+            # Execute each code block
+            results = []
+            for code in code_blocks:
+                result = await asyncio.to_thread(execute_code, code, 5)
+                results.append(format_result_for_response(result))
+
+            execution_response = "\n\n---\n\n".join(results)
+            await asyncio.to_thread(
+                memory_manager.add_message, request.session_id, "assistant", execution_response
+            )
+            asyncio.create_task(asyncio.to_thread(
+                log_turn, conv_id=conv_id, session_id=request.session_id, turn_index=1,
+                role="assistant", content=execution_response, model_name=MODEL_NAME,
+                prompt=request.message, ttft_seconds=0.0,
+                total_time_seconds=time.time() - turn_start,
+            ))
+            orchestrator.reset_session(request.session_id)
+
+            _cleanup_request_cache()
+            async def code_exec_stream():
+                yield f"data: {json.dumps({'content': execution_response, 'conv_id': conv_id})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'conv_id': conv_id})}\n\n"
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(code_exec_stream(), media_type="text/event-stream")
+
     # Early cache check (before expensive processing)
     if not request.is_continuation:
         cached_response = response_cache.get(request.message, request.session_id)
@@ -654,6 +698,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
 
     rag_context_block = ""
     doc_context_block = ""
+    web_search_block = ""
     if not request.is_continuation and not is_simple and category in INTENTS_REQUIRING_RAG:
         rag_task = asyncio.to_thread(retriever.retrieve, request.message)
         doc_task = asyncio.to_thread(
@@ -666,6 +711,16 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             logger.info("[RAG] Knowledge injected for category: %s", category)
         if doc_context:
             doc_context_block = f"[USER DOCUMENT]\n{doc_context}"
+
+        # Web search for queries that need real-time information
+        if web_search_engine.should_search(request.message):
+            try:
+                web_result = await asyncio.to_thread(web_search_engine.search, request.message)
+                if web_result.success and web_result.results:
+                    web_search_block = f"[WEB SEARCH RESULTS]\n{web_search_engine.format_results_for_context(web_result)}"
+                    logger.info("[WebSearch] Results injected for query: %s", request.message[:50])
+            except Exception as e:
+                logger.warning("[WebSearch] Search failed: %s", e)
     else:
         if not request.is_continuation:
             logger.info("[RAG] Bypassed RAG for category: %s", category)
@@ -675,6 +730,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         sc = sc.replace("__CORRECTIONS__", corrections_block)
         sc = sc.replace("__VERIFIED_KNOWLEDGE__", rag_context_block)
         sc = sc.replace("__USER_DOCUMENTS__", doc_context_block)
+        sc = sc.replace("__WEB_SEARCH__", web_search_block)
         augmented_messages[0]["content"] = sc
 
     logger.info(
@@ -698,7 +754,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     elif is_simple:
         max_new_tokens = _get_token_budget(category, request.message)
     else:
-        max_new_tokens = 2048
+        max_new_tokens = 4096
     num_candidates = 1
 
     stop_tokens = [tokenizer.eos_token] if tokenizer.eos_token is not None else []
@@ -954,6 +1010,50 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ─── Code Execution Endpoint ─────────────────────────────────────────────────
+class CodeExecutionRequest(BaseModel):
+    code: str
+    timeout: int = 5  # seconds
+
+@app.post("/execute")
+async def execute_code_endpoint(req: CodeExecutionRequest):
+    """Execute Python code in a restricted sandbox."""
+    logger.info("[CodeExec] Request received, code length=%d", len(req.code))
+
+    try:
+        result = await asyncio.to_thread(
+            execute_code,
+            req.code,
+            min(req.timeout, 10),  # Cap at 10 seconds
+        )
+        response_text = format_result_for_response(result)
+        logger.info("[CodeExec] Success=%s, time=%sms", result.success, result.execution_time_ms)
+        return {"success": result.success, "response": response_text}
+    except Exception as e:
+        logger.error("[CodeExec] Execution error: %s", e)
+        return {"success": False, "response": f"Execution error: {str(e)}"}
+
+
+# ─── Code Execution Fast-Path ────────────────────────────────────────────────
+def _detect_code_execution_request(message: str) -> bool:
+    """Detect if the user is asking to run/execute code directly."""
+    lower = message.lower().strip()
+    run_patterns = [
+        r'^run\s+(this\s+)?(code|script|program|it)',
+        r'^execute\s+(this\s+)?(code|script|program|it)',
+        r'^python\s+(this\s+)?(code|script)',
+        r'^can\s+you\s+run\s',
+        r'^please\s+run\s',
+        r'^could\s+you\s+run\s',
+        r'^run\s+the\s+following',
+        r'^execute\s+the\s+following',
+    ]
+    for pattern in run_patterns:
+        if re.search(pattern, lower):
+            return True
+    return False
 
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

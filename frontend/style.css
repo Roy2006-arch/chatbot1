@@ -199,6 +199,68 @@ body {
     color: #ffffff;
 }
 
+/* Run Button for Code Execution */
+.run-btn {
+    background: transparent;
+    border: none;
+    color: #4ade80;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    transition: color 0.2s;
+    font-family: inherit;
+}
+
+.run-btn:hover {
+    color: #22c55e;
+}
+
+.run-btn:disabled {
+    color: #6b7280;
+    cursor: not-allowed;
+}
+
+/* Code Execution Output */
+.code-output {
+    background-color: #1a1a2e;
+    border-top: 1px solid #333;
+    padding: 12px 16px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.9em;
+    line-height: 1.5;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.code-output .executing {
+    color: #9ca3af;
+    font-style: italic;
+}
+
+.code-output .output-success {
+    color: #a5f3fc;
+}
+
+.code-output .output-error {
+    color: #fca5a5;
+}
+
+.code-output pre {
+    background: transparent !important;
+    margin: 0;
+    padding: 0;
+    border: none;
+}
+
+.code-output code {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.9em;
+}
+
 .code-block-wrapper pre {
     margin: 0;
     padding: 16px;
@@ -387,6 +449,11 @@ textarea::placeholder {
     
     .code-block-wrapper pre {
         padding: 12px;
+    }
+    
+    .code-output {
+        padding: 8px 12px;
+        max-height: 200px;
     }
 }
 

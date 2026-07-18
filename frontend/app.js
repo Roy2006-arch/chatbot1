@@ -6,10 +6,18 @@ marked.use({
             const escapeHtml = (unsafe) => unsafe.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
             const highlighted = validLang === 'plaintext' ? escapeHtml(code) : hljs.highlight(code, { language: validLang }).value;
             
+            const isPython = validLang === 'python' || validLang === 'py';
+            const runButton = isPython ? `
+                <button class="run-btn" onclick="executeCode(this)" data-code="${escapeHtml(code).replace(/"/g, '&quot;')}">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    Run
+                </button>` : '';
+            
             return `
 <div class="code-block-wrapper">
     <div class="code-block-header">
         <span class="code-lang">${validLang}</span>
+        ${runButton}
         <button class="copy-btn" onclick="copyCode(this)">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
             Copy
@@ -57,6 +65,51 @@ function copyCode(button) {
         setTimeout(() => button.innerHTML = originalHTML, 2000);
     });
 };
+
+// --- Code Execution Function ---
+async function executeCode(button) {
+    const code = button.getAttribute('data-code');
+    if (!code) return;
+    
+    // Find the code block wrapper
+    const wrapper = button.closest('.code-block-wrapper');
+    
+    // Create or find output area
+    let outputArea = wrapper.querySelector('.code-output');
+    if (!outputArea) {
+        outputArea = document.createElement('div');
+        outputArea.className = 'code-output';
+        wrapper.appendChild(outputArea);
+    }
+    
+    // Show loading state
+    button.disabled = true;
+    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg> Running...';
+    outputArea.innerHTML = '<div class="executing">Executing code...</div>';
+    outputArea.style.display = 'block';
+    
+    try {
+        const response = await fetch(`${BACKEND_URL}/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: code, timeout: 5 })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            outputArea.innerHTML = `<div class="output-success">${sanitizeHTML(marked.parse(result.response))}</div>`;
+        } else {
+            outputArea.innerHTML = `<div class="output-error">${sanitizeHTML(marked.parse(result.response))}</div>`;
+        }
+    } catch (error) {
+        outputArea.innerHTML = `<div class="output-error">**Error:** Could not execute code. ${error.message}</div>`;
+    }
+    
+    // Reset button
+    button.disabled = false;
+    button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg> Run';
+}
 
 const chatMessages = document.getElementById('chatMessages');
 const userInput = document.getElementById('userInput');

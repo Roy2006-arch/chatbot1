@@ -19,3 +19,5 @@ transformers
 apscheduler
 python-multipart
 aiosqlite
+# Web Search (no API key needed)
+duckduckgo-search
