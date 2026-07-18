@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import contextvars
 from pathlib import Path
 
 import aiofiles
@@ -18,6 +19,9 @@ AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 logger = logging.getLogger("chatbot.middleware")
 
+# Global request-scoped context variable for the reasoning trace
+request_trace_var: contextvars.ContextVar = contextvars.ContextVar("request_trace", default=None)
+
 
 class ReasoningAuditMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, pipeline: ReasoningPipeline):
@@ -26,11 +30,15 @@ class ReasoningAuditMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         t0 = time.perf_counter()
+        # Initialize context variable for this request execution context
+        token = request_trace_var.set(None)
+        
         response = await call_next(request)
+        
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
 
         if request.url.path.startswith("/chat"):
-            trace = self.pipeline.get_last_trace()
+            trace = request_trace_var.get()
             if trace:
                 response.headers["X-Pipeline-Intent"] = trace.intent_category
                 response.headers["X-Pipeline-Latency-Ms"] = str(trace.latency_ms)
@@ -52,5 +60,6 @@ class ReasoningAuditMiddleware(BaseHTTPMiddleware):
                         await f.write(json.dumps(audit_entry, ensure_ascii=False) + "\n")
                 except OSError as exc:
                     logger.warning("Could not write audit log: %s", exc)
-
+        
+        request_trace_var.reset(token)
         return response

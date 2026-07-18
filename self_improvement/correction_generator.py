@@ -100,8 +100,13 @@ class CorrectionGenerator:
             return results
 
     def _heuristic_fix(self, prompt: str, original: str) -> Optional[str]:
-        fixes = []
+        """Apply safe regex-based cleanup to strip refusals and hedging.
 
+        Does NOT fall back to template generation — if the residual text
+        after cleanup is too short or still starts with a refusal, we
+        return None so the item gets flagged for human/LLM review instead
+        of injecting boilerplate into the training set.
+        """
         refusal_patterns = [
             (r"(?i)i'?m (just |only )?an ai", "I"),
             (r"(?i)as an ai (assistant|language model)", ""),
@@ -128,8 +133,10 @@ class CorrectionGenerator:
                 fixed = re.sub(pattern, "", fixed)
                 applied = True
 
+        # If the response still starts with a refusal after cleanup,
+        # reject it entirely — do NOT substitute a template.
         if re.search(r"(?i)^(i don't know|i'm not sure|i cannot|sorry)", fixed.strip()):
-            fixed = self._generate_constructive_response(prompt)
+            return None
 
         fixed = re.sub(r'\s+', ' ', fixed).strip()
         if not fixed.endswith(('.', '!', '?')):
@@ -141,55 +148,21 @@ class CorrectionGenerator:
         return None
 
     def _template_fix(self, prompt: str, original: str) -> Optional[str]:
-        prompt_lower = prompt.lower()
-        templates = {
-            "what is": f"{prompt}\n\n{prompt.strip('?')} is a concept that can be understood by examining its key aspects. "
-                       f"First, let's define what we mean by this term. Then we can explore its characteristics, "
-                       f"applications, and significance.",
-            "how to": f"{prompt}\n\nHere is a step-by-step approach:\n\n"
-                      f"1. First, understand the requirements and constraints.\n"
-                      f"2. Break down the problem into manageable parts.\n"
-                      f"3. Address each part systematically.\n"
-                      f"4. Verify the solution meets the original requirements.\n\n"
-                      f"Let me know if you need more details on any step.",
-            "explain": f"{prompt}\n\nLet me explain this clearly.\n\n"
-                       f"The core idea is straightforward. Let's build up from first principles:\n\n"
-                       f"At its foundation, this concept rests on a few key ideas. "
-                       f"Understanding these will make the rest clear.",
-            "why": f"{prompt}\n\nThere are several reasons for this:\n\n"
-                   f"1. The primary reason is related to the fundamental nature of the subject.\n"
-                   f"2. Additionally, contextual factors play an important role.\n"
-                   f"3. Finally, practical considerations also influence this.",
-        }
+        """Template-based correction — DISABLED.
 
-        if len(prompt) < 10:
-            return None
-
-        for key, template in templates.items():
-            if key in prompt_lower:
-                return template
-
+        Previously this injected generic boilerplate paragraphs like
+        'The core idea is straightforward...' which polluted training data.
+        Items that reach this point should be flagged for human/LLM review.
+        """
         return None
 
-    def _generate_constructive_response(self, prompt: str) -> str:
-        prompt_lower = prompt.lower()
-        if "?" in prompt:
-            return (
-                f"Thank you for your question. Let me provide a helpful response.\n\n"
-                f"To address your query about \"{prompt[:100].strip()}\", "
-                f"here is what you need to know:\n\n"
-                f"The answer depends on several factors. First, consider the context and requirements. "
-                f"Then evaluate the options based on your specific needs.\n\n"
-                f"If you can provide more details, I can give a more specific answer."
-            )
-        return (
-            f"Thank you for your message. Let me provide a thoughtful response.\n\n"
-            f"Based on your input, here are some key points to consider:\n\n"
-            f"1. First, understand the core of what is being asked.\n"
-            f"2. Then, examine the relevant context and background.\n"
-            f"3. Finally, draw conclusions based on the available information.\n\n"
-            f"I hope this helps! Feel free to ask follow-up questions."
-        )
+    def _generate_constructive_response(self, prompt: str) -> Optional[str]:
+        """Constructive response generation — DISABLED.
+
+        Previously returned robotic filler text that poisoned DPO/SFT datasets.
+        Returns None so items are flagged for human or teacher-model review.
+        """
+        return None
 
     def _detect_method(self, correction: str) -> CorrectionMethod:
         return CorrectionMethod.AUTO_GENERATED

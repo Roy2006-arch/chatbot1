@@ -183,10 +183,10 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 MODE = "best"
 MODELS = {
-    "fast": "gpt2",
-    "best": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "fast": "Qwen/Qwen2.5-1.5B-Instruct",
+    "best": "Qwen/Qwen2.5-3B-Instruct",
 }
-MODEL_NAME = MODELS.get(MODE, "gpt2")
+MODEL_NAME = MODELS.get(MODE, "Qwen/Qwen2.5-3B-Instruct")
 
 logger.info("Loading tokenizer for %s...", MODEL_NAME)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -242,8 +242,13 @@ lifecycle_manager = MemoryLifecycleManager(
 )
 
 app.add_middleware(ReasoningAuditMiddleware, pipeline=reasoning_pipeline)
-app.add_middleware(ResponseRefinementASGIMiddleware)
-app.add_middleware(StrictCompressionMiddleware)
+# NOTE: ResponseRefinementASGIMiddleware and StrictCompressionMiddleware disabled.
+# Their functionality (dedup, filler removal, compression) is now handled by the
+# inline reasoning_pipeline.refine() call in the /chat/stream endpoint, which is
+# already guarded by intent category. Running two additional ASGI body interceptors
+# on top was causing >8s latency per request due to triple buffering + regex passes.
+# app.add_middleware(ResponseRefinementASGIMiddleware)
+# app.add_middleware(StrictCompressionMiddleware)
 
 INTENTS_REQUIRING_RAG = [
     "coding_problem", "debugging", "explanation",
@@ -369,8 +374,8 @@ def _has_chat_template(tokenizer) -> bool:
     return hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template is not None
 
 
-def _format_prompt(tokenizer, messages, mode: str) -> str:
-    if _has_chat_template(tokenizer) and mode == "best":
+def _format_prompt(tokenizer, messages, mode: str = "best") -> str:
+    if _has_chat_template(tokenizer):
         return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     parts = []
     for m in messages:
@@ -694,10 +699,15 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     num_candidates = 1
 
     stop_tokens = [tokenizer.eos_token] if tokenizer.eos_token is not None else []
+    additional_stops = ["<|im_end|>", "<|im_start|>", "<|user|>", "<|assistant|>", "\nuser:", "\nUser:", "\nassistant:", "\nAssistant:"]
+    for stop_seq in additional_stops:
+        if stop_seq not in stop_tokens:
+            stop_tokens.append(stop_seq)
+
     generation_kwargs = dict(
         max_new_tokens=max_new_tokens,
         temperature=0.7,
-        repetition_penalty=1.1,
+        repetition_penalty=1.15,
         top_p=0.9,
         stop=stop_tokens,
     )

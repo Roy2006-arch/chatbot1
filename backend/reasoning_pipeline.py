@@ -292,6 +292,12 @@ class ReasoningPipeline:
 
         trace.latency_ms = round((time.perf_counter() - t0) * 1000, 2)
         self._last_trace = trace
+        # Also set request-scoped context variable for thread-safe audit logging
+        try:
+            from backend.response_middleware import request_trace_var
+            request_trace_var.set(trace)
+        except ImportError:
+            pass
 
         logger.info(
             "[ReasoningPipeline] Intent=%s | Depth=%s | Mode=%s | Latency=%.1fms",

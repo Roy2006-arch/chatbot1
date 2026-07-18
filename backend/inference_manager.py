@@ -38,6 +38,7 @@ class InferenceManager:
                     max_model_len=max_model_len,
                     trust_remote_code=trust_remote_code,
                     enforce_eager=True,
+                    # pyrefly: ignore [unexpected-keyword]
                     disable_log_requests=True,
                 )
                 self.engine = AsyncLLMEngine.from_engine_args(engine_args)
@@ -58,30 +59,49 @@ class InferenceManager:
                 trust_remote_code=trust_remote_code,
             )
 
+    def _clean_stop_sequences(self, text: str, stop_sequences: List[str]) -> tuple[str, bool]:
+        if not stop_sequences:
+            return text, False
+        earliest_idx = len(text)
+        found = False
+        for stop_seq in stop_sequences:
+            idx = text.find(stop_seq)
+            if idx != -1:
+                earliest_idx = min(earliest_idx, idx)
+                found = True
+        if found:
+            return text[:earliest_idx], True
+        return text, False
+
     async def generate_stream(
         self,
         prompt: str,
         request_id: str,
         sampling_kwargs: Dict[str, Any],
     ) -> AsyncGenerator[str, None]:
+        stop_seqs = sampling_kwargs.get("stop", []) or []
+        
         if self.use_vllm:
             sampling_params = SamplingParams(
                 n=sampling_kwargs.get("n", 1),
                 temperature=sampling_kwargs.get("temperature", 0.7),
                 top_p=sampling_kwargs.get("top_p", 0.9),
                 max_tokens=sampling_kwargs.get("max_new_tokens", 1024),
-                repetition_penalty=sampling_kwargs.get("repetition_penalty", 1.1),
-                stop=sampling_kwargs.get("stop", None),
+                repetition_penalty=sampling_kwargs.get("repetition_penalty", 1.15),
+                stop=stop_seqs,
             )
 
             results_generator = self.engine.generate(prompt, sampling_params, request_id)
             last_text = ""
             async for request_output in results_generator:
                 current_text = request_output.outputs[0].text
-                new_text = current_text[len(last_text):]
-                last_text = current_text
+                cleaned_text, stop_found = self._clean_stop_sequences(current_text, stop_seqs)
+                new_text = cleaned_text[len(last_text):]
+                last_text = cleaned_text
                 if new_text:
                     yield new_text
+                if stop_found:
+                    break
         else:
             from backend.queue_streamer import QueueStreamer
             tokenizer = self.tokenizer
@@ -103,11 +123,19 @@ class InferenceManager:
                 self.fallback_pipeline(prompt, **kwargs)
             thread = threading.Thread(target=_generate, daemon=True)
             thread.start()
+            
+            accumulated_text = ""
             while True:
                 token = await queue.get()
                 if token is None:
                     break
-                yield token
+                accumulated_text += token
+                cleaned_text, stop_found = self._clean_stop_sequences(accumulated_text, stop_seqs)
+                new_yieldable = cleaned_text[len(accumulated_text) - len(token):]
+                if new_yieldable:
+                    yield new_yieldable
+                if stop_found:
+                    break
 
     async def generate_full(
         self,
