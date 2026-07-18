@@ -637,24 +637,23 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     is_simple = _is_simple_query(category, request.message)
     rag_result = None
 
-    # Inject realtime context into ALL system messages (prevents hallucination of time/date)
     if augmented_messages and augmented_messages[0]["role"] == "system":
-        system_content = augmented_messages[0]["content"]
-        realtime_block = realtime_handler.get_realtime_context_block(request.session_id)
-        system_content = system_content.replace(
-            "[INTERNAL PLANNING]",
-            f"[REALTIME DATA]\n{realtime_block}\n\n[INTERNAL PLANNING]",
-        )
-        augmented_messages[0]["content"] = system_content
+        sc = augmented_messages[0]["content"]
+        rt = realtime_handler.get_realtime_context_block(request.session_id)
+        sc = sc.replace("__REALTIME_DATA__", f"[CURRENT DATE AND TIME]\n{rt}" if rt else "")
+        augmented_messages[0]["content"] = sc
 
-    # MistakeMemory corrections (single call, shared with RAG context)
-    corrections_block = None
+    corrections_block = ""
     if not request.is_continuation and not is_simple and augmented_messages and augmented_messages[0]["role"] == "system":
         try:
-            corrections_block = await asyncio.to_thread(get_mistake_memory().format_corrections_for_prompt, request.message)
+            cb = await asyncio.to_thread(get_mistake_memory().format_corrections_for_prompt, request.message)
+            if cb:
+                corrections_block = f"[CORRECTIONS FROM PAST MISTAKES]\n{cb}"
         except Exception as e:
             logger.warning("[MistakeMemory] Injection error: %s", e)
 
+    rag_context_block = ""
+    doc_context_block = ""
     if not request.is_continuation and not is_simple and category in INTENTS_REQUIRING_RAG:
         rag_task = asyncio.to_thread(retriever.retrieve, request.message)
         doc_task = asyncio.to_thread(
@@ -662,19 +661,21 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         )
         rag_result, doc_context = await asyncio.gather(rag_task, doc_task)
 
-        if augmented_messages and augmented_messages[0]["role"] == "system":
-            system_content = augmented_messages[0]["content"]
-            if corrections_block:
-                system_content += f"\n\n{corrections_block}"
-            if rag_result and rag_result.context_block:
-                system_content += f"\n\n[USE THE FOLLOWING VERIFIED KNOWLEDGE]\n{rag_result.context_block}"
-                logger.info("[RAG] Knowledge injected for category: %s", category)
-            if doc_context:
-                system_content += f"\n\n[USER-UPLOADED DOCUMENT CONTEXT]\n{doc_context}"
-            augmented_messages[0]["content"] = system_content
+        if rag_result and rag_result.context_block:
+            rag_context_block = f"[VERIFIED KNOWLEDGE]\n{rag_result.context_block}"
+            logger.info("[RAG] Knowledge injected for category: %s", category)
+        if doc_context:
+            doc_context_block = f"[USER DOCUMENT]\n{doc_context}"
     else:
         if not request.is_continuation:
             logger.info("[RAG] Bypassed RAG for category: %s", category)
+
+    if augmented_messages and augmented_messages[0]["role"] == "system":
+        sc = augmented_messages[0]["content"]
+        sc = sc.replace("__CORRECTIONS__", corrections_block)
+        sc = sc.replace("__VERIFIED_KNOWLEDGE__", rag_context_block)
+        sc = sc.replace("__USER_DOCUMENTS__", doc_context_block)
+        augmented_messages[0]["content"] = sc
 
     logger.info(
         "[ReasoningPipeline] session=%s intent=%s steps=%d",

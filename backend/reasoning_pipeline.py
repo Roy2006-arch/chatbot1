@@ -12,6 +12,7 @@ from backend.hallucination_guard import HallucinationGuard
 from backend.validation_engine import ResponseValidationEngine
 from backend.url_verifier import URLVerifier, ResponseURLReport
 from backend.refinement_middleware import ResponseRefinementMiddleware
+from backend.constraint_validator import detect_constraints, check_constraints, enforce_constraints
 
 logger = logging.getLogger("reasoning_pipeline")
 logger.setLevel(logging.DEBUG)
@@ -157,7 +158,7 @@ class PromptAugmenter:
         trace: ReasoningTrace,
     ) -> list[dict[str, str]]:
         planning_block = (
-            f"\n\n[INTERNAL PLANNING]\n"
+            f"[INTERNAL PLANNING]\n"
             f"Intent: {trace.intent_category}\n"
             f"Strategy: {trace.reasoning_strategy}\n"
             f"Mode: {trace.response_mode}\n"
@@ -165,14 +166,14 @@ class PromptAugmenter:
             f"Required Structure: {trace.output_structure}\n"
             f"Reasoning Steps:\n" + "\n".join(f"  - {s}" for s in trace.steps) +
             f"\n\n[INSTRUCTION]\n"
-            f"You MUST first perform hidden internal reasoning inside <thought> tags. "
-            f"Analyze the problem, break it into subproblems, verify logical consistency, "
-            f"and then provide your final polished response OUTSIDE the tags."
+            f"Analyze the problem inside <thought> tags, then provide final response."
         )
 
         new_messages = [m.copy() for m in messages]
         if new_messages and new_messages[0]["role"] == "system":
-            new_messages[0]["content"] += planning_block
+            new_messages[0]["content"] = new_messages[0]["content"].replace(
+                "__PLANNING_INSTRUCTIONS__", planning_block
+            )
 
         return new_messages
 
@@ -392,13 +393,21 @@ class ReasoningPipeline:
 
         final = self.refinement_middleware.refine_response(user_message, final)
 
+        constraints = detect_constraints(user_message)
+        if constraints:
+            violations = check_constraints(final, constraints)
+            if violations:
+                logger.info("[ReasoningPipeline] Constraint violations: %s", violations)
+                fixed, was_modified = enforce_constraints(final, constraints)
+                if was_modified:
+                    final = fixed
+                    modifications.append("constraint_enforced")
+                    trace.draft_issues.extend(violations)
+
         quality_score = self._compute_quality_score(final, user_message, context, trace.steps)
         if quality_score < self.threshold:
             logger.info("[ReasoningPipeline] Quality score %.3f below threshold %.2f", quality_score, self.threshold)
-            if not report.is_valid:
-                modifications.append("quality_below_threshold")
-            elif report.needs_regeneration and allow_regeneration:
-                modifications.append("quality_below_threshold_needs_regen")
+            modifications.append("quality_below_threshold")
 
         trace.refinement_applied = len(modifications) > 0
         trace.latency_ms += round((time.perf_counter() - t0) * 1000, 2)

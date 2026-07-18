@@ -111,34 +111,46 @@ class ContextManager:
         include_key_info: bool = True,
     ) -> List[Dict[str, str]]:
         if session_id not in self._sessions:
-            return [{"role": "system", "content": get_system_identity()}]
+            base = get_system_identity()
+            for m in ["__PERSISTENT_FACTS__", "__CONVERSATION_SUMMARY__", "__RECENT_USER_STATEMENTS__"]:
+                base = base.replace(m, "")
+            return [{"role": "system", "content": base}]
 
         state = self._sessions[session_id]
         state.last_accessed = time.time()
 
         messages: List[Dict[str, str]] = []
-        system_content = [get_system_identity()]
+        base = get_system_identity()
 
+        persistent_facts = ""
         if include_key_info and state.key_info:
             ki_lines = []
             for category, values in state.key_info.items():
                 unique_vals = list(dict.fromkeys(values))[-3:]
                 ki_lines.append(f"  {category}: {', '.join(unique_vals)}")
             if ki_lines:
-                system_content.append("[Persistent user facts]\n" + "\n".join(ki_lines))
+                persistent_facts = "[Persistent user facts]\n" + "\n".join(ki_lines)
 
-        if state.rolling_summary:
-            system_content.append(f"[Conversation summary so far]\n{state.rolling_summary}")
-
+        conversation_summary = state.rolling_summary
+        recent_user_statements = ""
         if current_query and state.faiss_index and state.faiss_index.ntotal > 0:
             recalled = self._recall_similar(state, current_query, k=3)
             if recalled:
-                system_content.append(
+                recent_user_statements = (
                     "[Relevant past user statements]\n"
                     + "\n".join(f"  - {r}" for r in recalled)
                 )
 
-        messages.append({"role": "system", "content": "\n\n".join(system_content)})
+        system_content = base
+        system_content = system_content.replace("__PERSISTENT_FACTS__", persistent_facts)
+        system_content = system_content.replace("__CONVERSATION_SUMMARY__", conversation_summary if conversation_summary else "")
+
+        if recent_user_statements:
+            system_content = system_content.replace("__RECENT_USER_STATEMENTS__", recent_user_statements)
+        else:
+            system_content = system_content.replace("__RECENT_USER_STATEMENTS__", "")
+
+        messages.append({"role": "system", "content": system_content})
         messages.extend(state.window)
 
         return self._trim_messages_to_budget(messages)
