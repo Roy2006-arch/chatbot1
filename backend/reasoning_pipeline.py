@@ -241,23 +241,17 @@ class PromptAugmenter:
         reasoning_steps: list[str],
     ) -> list[dict[str, str]]:
         """
-        Injects a structured reasoning prefix into the system message.
+        Return the messages unchanged.
+
+        Historically this injected a verbose "[Reasoning Context] Goal/Strategy: ..."
+        block into the system prompt. On a small instruct model that text is noise:
+        it bloats the prompt, competes with the real instructions, and measurably
+        hurts instruction-following. Intent classification is still used for RAG
+        routing, decoding presets, and attaching the coding developer prompt — but
+        we no longer pollute the prompt with the strategy list.
         """
-        steps_text = "\n".join(
-            f"  {i+1}. {step}" for i, step in enumerate(reasoning_steps)
-        )
-        reasoning_guidance = (
-            f"\n\n[Reasoning Context]\n"
-            f"Goal: {intent_summary}\n"
-            f"Strategy: {', '.join(reasoning_steps)}\n"
-        )
-        
-        # Copy to avoid mutation
-        new_messages = [m.copy() for m in messages]
-        if new_messages and new_messages[0]["role"] == "system":
-            new_messages[0]["content"] += reasoning_guidance
-            
-        return new_messages
+        # Copy to avoid mutating the caller's list.
+        return [m.copy() for m in messages]
 
 
 # ---------------------------------------------------------------------------
@@ -363,52 +357,27 @@ class ResponseRewriter:
     ]
 
     def rewrite(self, response: str, intent_category: str, issues: list[str]) -> str:
-        if not issues:
-            # Still run basic cleanup even when no issues flagged
-            return self._basic_cleanup(response)
+        """
+        Safe, non-destructive cleanup only.
 
-        result = response.strip()
-
-        # --- Rule 4: Strip robotic phrases (always applied) ---
-        for pattern, replacement in self._ROBOTIC_PHRASES:
-            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
-
-        # --- Strip role leakage ---
-        for pattern in self._LEAK_PATTERNS:
-            result = re.sub(pattern, '', result, flags=re.IGNORECASE)
-
-        # --- Fix curt openers ---
-        for pattern, replacement in self._CURT_OPENERS:
-            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE, count=1)
-
-        # --- Capitalise first letter ---
-        if result and not result[0].isupper():
-            result = result[0].upper() + result[1:]
-
-        # --- Ensure trailing punctuation ---
-        if result and result[-1] not in '.!?':
-            result += '.'
-
-        # --- Add empathetic header for complaints ---
-        if intent_category == "complaint" and not result.lower().startswith("i understand"):
-            result = "I understand this isn't working as expected — let's fix it. " + result
-
-        # --- Normalize excess whitespace ---
-        result = re.sub(r'\n{3,}', '\n\n', result)
-        result = re.sub(r' {2,}', ' ', result)
-
-        return result.strip()
+        The previous implementation rewrote openers, deleted "robotic" phrases, and
+        force-appended punctuation. On real answers (especially code) those regexes
+        corrupted output. We now only strip role-leakage artifacts and normalise
+        whitespace — cosmetic fixes that never change meaning.
+        """
+        return self._basic_cleanup(response)
 
     def _basic_cleanup(self, response: str) -> str:
         result = response.strip()
-        # Rule 4: Always strip robotic phrases even in passing responses
-        for pattern, replacement in self._ROBOTIC_PHRASES:
-            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+
+        # Strip leaked role markers only when they appear at the start of a line,
+        # so we don't mangle legitimate prose like "the user: object".
+        result = re.sub(r'(?im)^\s*(user|assistant|system)\s*:\s*', '', result)
+
+        # Never touch fenced code — only collapse whitespace outside code blocks
+        # would require a parser; collapsing 3+ blank lines is safe everywhere.
         result = re.sub(r'\n{3,}', '\n\n', result)
-        result = re.sub(r' {2,}', ' ', result)
-        if result and not result[0].isupper():
-            result = result[0].upper() + result[1:]
-        return result
+        return result.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +422,7 @@ class ReasoningPipeline:
         trace.intent_category = category
 
         if category in ["coding", "debugging"]:
-            from coding_intent import CodingIntentClassifier
+            from backend.coding_intent import CodingIntentClassifier
             coding_classifier = CodingIntentClassifier()
             coding_intent = coding_classifier.classify(user_message)
             if coding_intent.is_coding:
@@ -491,7 +460,7 @@ class ReasoningPipeline:
         trace.intent_category = category
 
         if category in ["coding", "debugging"]:
-            from coding_intent import CodingIntentClassifier
+            from backend.coding_intent import CodingIntentClassifier
             coding_classifier = CodingIntentClassifier()
             coding_intent = coding_classifier.classify(user_message)
             if coding_intent.is_coding:

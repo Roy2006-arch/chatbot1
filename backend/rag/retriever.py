@@ -165,7 +165,7 @@ class RAGRetriever:
         knowledge_base:    KnowledgeBase,
         top_k_candidates:  int   = 20,
         top_n_results:     int   = 5,
-        score_floor:       float = 0.20,
+        score_floor:       float = 0.45,   # raised from 0.20: avoid weak/off-topic context
         use_reranker:      bool  = True,
         use_mmr:           bool  = True,
         mmr_lambda:        float = 0.6,
@@ -193,7 +193,7 @@ class RAGRetriever:
         import time
         t0 = time.perf_counter()
 
-        # ── Step 1: Bi-encoder ANN search ────────────────────────────────
+        # ── Step 1: Bi-encoder ANN search ─────────────────────────────
         candidates = self.kb.search(query, top_k=self.top_k_candidates, score_floor=self.score_floor)
         total_found = len(candidates)
 
@@ -203,7 +203,7 @@ class RAGRetriever:
                 latency_ms=round((time.perf_counter() - t0) * 1000, 2)
             )
 
-        # ── Step 2: Optional cross-encoder reranking ─────────────────────
+        # ── Step 2: Optional cross-encoder reranking ──────────────────
         used_reranker = False
         if self.use_reranker and len(candidates) > self.top_n:
             try:
@@ -218,7 +218,7 @@ class RAGRetriever:
             except Exception as exc:
                 logger.warning("[RAGRetriever] Cross-encoder failed: %s", exc)
 
-        # ── Step 3: MMR diversification ──────────────────────────────────
+        # ── Step 3: MMR diversification ───────────────────────────
         used_mmr = False
         if self.use_mmr and len(candidates) > self.top_n:
             query_vec = self._embedder.encode([query], show_progress_bar=False)[0]
@@ -227,7 +227,7 @@ class RAGRetriever:
         else:
             candidates = candidates[:self.top_n]
 
-        # ── Step 4: Format into context block ────────────────────────────
+        # ── Step 4: Format into context block ───────────────────────
         context_block = self._format(candidates, query)
 
         latency = round((time.perf_counter() - t0) * 1000, 2)
@@ -261,17 +261,6 @@ class RAGRetriever:
     def _format(self, results: list[SearchResult], query: str) -> str:
         """
         Produce a clean, structured context block for injection into the LLM prompt.
-
-        Format:
-            ### Retrieved Knowledge
-            [1] Source: faq.pdf (score: 0.87)
-            <chunk text>
-
-            [2] Source: manual.pdf (score: 0.74)
-            <chunk text>
-            ---
-            Use the above context to inform your answer. If the context is not
-            relevant to the question, rely on your general knowledge instead.
         """
         if not results:
             return ""
@@ -284,8 +273,9 @@ class RAGRetriever:
 
         lines.append("---")
         lines.append(
-            "Use the retrieved knowledge above to inform your answer where relevant. "
-            "If the context does not address the question, use your general knowledge. "
-            "Do not fabricate information that contradicts the context."
+            "Base your answer on the retrieved knowledge above. Quote or paraphrase it "
+            "and, where useful, reference the source number (e.g. [1]). If the context "
+            "does not contain the answer, say you don't have that information rather than "
+            "guessing. Never fabricate details that contradict the context."
         )
         return "\n".join(lines)

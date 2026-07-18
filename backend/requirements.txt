@@ -14,7 +14,11 @@ PyPDF2
 beautifulsoup4
 # Inference
 torch
-transformers
+transformers>=4.43        # Qwen2.5 chat template support
+accelerate                # device_map / low_cpu_mem_usage loading
+sentencepiece             # tokenizer backend for Qwen
+# Optional CPU speedup: swap the transformers path for a GGUF model via
+#   llama-cpp-python       # (see AUDIT.md — gated behind an env flag, not required)
 # Optional: cross-encoder reranking (improves RAG accuracy, ~80MB download)
 # sentence-transformers already covers this — no extra install needed
 # Feedback Loop System
