@@ -244,24 +244,47 @@ class ContextManager:
         log.debug("[ContextManager] Compressed %d messages.", evict_count)
 
     def _summarize_turns(self, turns: List[Dict[str, str]]) -> str:
+        """Produce a clean, natural-language summary of evicted turns.
+
+        Uses bullet points grouped by topic exchange rather than messy
+        pipe-delimited concatenation that confuses the generator.
+        """
         lines = []
-        for msg in turns:
+        i = 0
+        while i < len(turns):
+            msg = turns[i]
             role = msg["role"]
             text = msg["content"].strip()
+
             if role == "user":
-                trimmed = text[:200] + ("..." if len(text) > 200 else "")
-                lines.append(f"User asked: {trimmed}")
+                user_text = text[:200] + ("..." if len(text) > 200 else "")
+                # Try to pair with the following assistant response
+                if i + 1 < len(turns) and turns[i + 1]["role"] == "assistant":
+                    asst_text = turns[i + 1]["content"].strip()
+                    first_sent = re.split(r"(?<=[.!?])\s+", asst_text, maxsplit=1)[0]
+                    first_sent = first_sent[:180] + ("..." if len(first_sent) > 180 else "")
+                    lines.append(f"- User asked about: {user_text}. Response covered: {first_sent}")
+                    i += 2
+                    continue
+                else:
+                    lines.append(f"- User asked: {user_text}")
             elif role == "assistant":
                 first_sent = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
                 first_sent = first_sent[:180] + ("..." if len(first_sent) > 180 else "")
-                lines.append(f"Assistant said: {first_sent}")
-        return " | ".join(lines)
+                lines.append(f"- Assistant responded: {first_sent}")
+            i += 1
+
+        return "\n".join(lines)
 
     def _merge_summaries(self, old: str, new: str) -> str:
-        combined = old + "\n" + new
-        if len(combined) > 1800:
-            combined = "..." + combined[-1800:]
-        return combined
+        """Merge old and new summaries, dropping oldest bullet entries
+        when the combined length exceeds the budget.
+        """
+        combined_lines = old.strip().split("\n") + new.strip().split("\n")
+        # Keep dropping the oldest lines until we fit
+        while len("\n".join(combined_lines)) > 1800 and len(combined_lines) > 2:
+            combined_lines.pop(0)
+        return "\n".join(combined_lines)
 
     def _extract_key_info(self, state: SessionState, text: str) -> None:
         for category, pattern in _KI_PATTERNS:
