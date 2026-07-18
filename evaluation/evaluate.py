@@ -39,9 +39,9 @@ from logger import log_evaluation, save_run_summary, BAD_RESPONSE_THRESHOLD
 # Defaults
 # ---------------------------------------------------------------------------
 DEFAULT_BASE_URL  = "http://localhost:8000"
-DEFAULT_MODEL     = "gpt2"
+DEFAULT_MODEL     = "Qwen/Qwen2.5-3B-Instruct"
 DATASET_PATH      = os.path.join(os.path.dirname(__file__), "data", "eval_dataset.json")
-STREAM_TIMEOUT    = 60   # seconds
+STREAM_TIMEOUT    = 120  # seconds
 
 
 # ---------------------------------------------------------------------------

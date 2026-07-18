@@ -41,7 +41,7 @@ from training.dataset_bridge import build_dataset, export_dataset, DatasetDict
 log = logging.getLogger("chatbot.qlora_finetune")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.3"
+MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 OUTPUT_DIR = "./results"
 
 CURRICULUM_STAGES = {

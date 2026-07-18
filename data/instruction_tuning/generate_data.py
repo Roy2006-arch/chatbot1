@@ -1,4 +1,5 @@
 import json
+import os
 
 def generate_dataset():
     dataset = []
@@ -65,7 +66,8 @@ def generate_dataset():
     # Final check
     print(f"Total examples: {len(all_examples)}")
     
-    with open('d:/chatbot/data/instruction_tuning/dataset.json', 'w') as f:
+    output_path = os.path.join(os.path.dirname(__file__), 'dataset.json')
+    with open(output_path, 'w') as f:
         json.dump(all_examples, f, indent=2)
 
 if __name__ == "__main__":

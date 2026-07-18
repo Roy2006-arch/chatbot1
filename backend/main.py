@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, validator
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 from transformers import AutoTokenizer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -35,6 +37,7 @@ from backend.compression_middleware import StrictCompressionMiddleware
 from backend.shared_resources import set_request_cache, get_request_cache, RequestEmbeddingCache
 from backend.realtime_utils import realtime_handler
 from backend.url_verifier import URLVerifier
+from backend.prompts import SYSTEM_PROMPT, GREETING_RESPONSES, INTENT_PATTERNS, INTENTS_REQUIRING_RAG, TOKEN_BUDGETS, RECOVERY_PROMPT
 from feedback import init_db, log_turn, new_conv_id, conv_logger_warmup, router as feedback_router
 from feedback.mistake_memory import MistakeMemory
 from feedback.auto_improve import start_auto_improve_scheduler, stop_auto_improve_scheduler
@@ -44,6 +47,38 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chatbot.main")
 
 _CPU_POOL: ThreadPoolExecutor | None = None
+
+class RateLimiter:
+    def __init__(self, requests_per_minute: int = 30):
+        self.rpm = requests_per_minute
+        self._buckets: dict[str, list[float]] = {}
+
+    def check(self, key: str) -> bool:
+        now = time.time()
+        window = 60.0
+        bucket = self._buckets.get(key, [])
+        cutoff = now - window
+        bucket = [t for t in bucket if t > cutoff]
+        if len(bucket) >= self.rpm:
+            self._buckets[key] = bucket
+            return False
+        bucket.append(now)
+        self._buckets[key] = bucket
+        return True
+
+rate_limiter = RateLimiter(requests_per_minute=30)
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path in ("/chat/stream", "/upload", "/rag/ingest", "/feedback/submit"):
+            client_ip = request.client.host if request.client else "unknown"
+            if not rate_limiter.check(client_ip):
+                logger.warning("[RateLimit] %s exceeded limit on %s", client_ip, request.url.path)
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many requests. Please slow down."},
+                )
+        return await call_next(request)
 
 def get_cpu_pool() -> ThreadPoolExecutor:
     global _CPU_POOL
@@ -168,7 +203,6 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
     "https://kaustav2006-chatbot-api.hf.space",
     "https://chatbot1-2026.netlify.app",
-    "*"
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -177,6 +211,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RateLimitMiddleware)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
@@ -250,32 +285,12 @@ app.add_middleware(ReasoningAuditMiddleware, pipeline=reasoning_pipeline)
 # app.add_middleware(ResponseRefinementASGIMiddleware)
 # app.add_middleware(StrictCompressionMiddleware)
 
-INTENTS_REQUIRING_RAG = [
-    "coding_problem", "debugging", "explanation",
-    "architecture", "optimization", "document_query", "general",
-]
+# INTENTS_REQUIRING_RAG imported from backend.prompts
 MAX_STREAM_SECONDS = 60
 MAX_AUTORETRY = 3
 MAX_CONTINUATION_NEW_TOKENS = 1024
 
-GREETING_RESPONSES = OrderedDict([
-    ("hello", "Hey! How can I help?"),
-    ("hi", "Hey! How can I help?"),
-    ("hey", "Hey! What's up?"),
-    ("good morning", "Morning! What can I help with?"),
-    ("good evening", "Evening! What can I do for you?"),
-    ("how are you", "Doing great! What about you?"),
-    ("how is the day", "All good here! What's up?"),
-    ("how's the day", "All good here! What's up?"),
-    ("how's your day", "Doing great! What's up?"),
-    ("how was your day", "Doing great! What's up?"),
-    ("how is your day going", "Doing great! What's up?"),
-    ("what's your name", "Just a chatbot. What can I do?"),
-    ("who are you", "Just a chatbot. What can I do?"),
-    ("who made you", "Built to help with questions and coding."),
-    ("thanks", "No problem!"),
-    ("thank you", "No problem!"),
-])
+GREETING_RESPONSES_ORDERED = OrderedDict(sorted(GREETING_RESPONSES.items(), key=lambda x: -len(x[0])))
 
 class SimpleResponseCache:
     def __init__(self, maxsize=512, ttl=600):
@@ -307,20 +322,17 @@ response_cache = SimpleResponseCache()
 
 def _get_greeting_response(message: str):
     normalized = message.lower().strip().rstrip("?!.,;:")
-    # Exact match first (handles "hi", "hello!", etc.)
     for greeting, response in GREETING_RESPONSES.items():
         if normalized == greeting:
             return response
-    # Extract first alphabetic word (handles "hi there", "hello world", "hi, how are you")
     match = re.match(r'[^a-z]*([a-z]+)', normalized)
     first_word = match.group(1) if match else ""
     single_word = {k: v for k, v in GREETING_RESPONSES.items() if " " not in k}
     if first_word in single_word:
         return single_word[first_word]
-    # Multi-word greetings (check longest first to avoid partial matches)
     multi_word = {k: v for k, v in GREETING_RESPONSES.items() if " " in k}
-    for greeting, response in sorted(multi_word.items(), key=lambda x: -len(x[0])):
-        if normalized.startswith(greeting):
+    for greeting, response in GREETING_RESPONSES_ORDERED.items():
+        if " " in greeting and normalized.startswith(greeting):
             return response
     return None
 
@@ -332,17 +344,7 @@ def _is_simple_query(category: str, message: str) -> bool:
     return False
 
 def _get_token_budget(category: str, message: str) -> int:
-    budgets = {
-        "casual_chat": 100,
-        "general": 200,
-        "document_query": 512,
-        "explanation": 512,
-        "architecture": 1024,
-        "optimization": 1024,
-        "debugging": 1024,
-        "coding_problem": 2048,
-    }
-    return budgets.get(category, 1024)
+    return TOKEN_BUDGETS.get(category, 1024)
 
 
 class ChatRequest(BaseModel):
@@ -845,9 +847,13 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                     logger.error("URL verification error: %s", e)
             asyncio.create_task(verify_and_log())
 
-        if getattr(reasoning_trace_updated, "refinement_applied", False):
-            if final_response.strip() != draft_text.strip():
-                yield f"data: {json.dumps({'content': '', 'refined': True, 'full': final_response, 'conv_id': conv_id})}\n\n"
+        refinement_was_applied = (
+            getattr(reasoning_trace_updated, "refinement_applied", False)
+            and final_response.strip() != draft_text.strip()
+        )
+        if refinement_was_applied:
+            yield f"data: {json.dumps({'content': '', 'refined': True, 'full': final_response, 'conv_id': conv_id})}\n\n"
+            orchestrator.set_buffer(request.session_id, final_response)
 
         if final_response.strip():
             response_cache.set(request.message, request.session_id, final_response)
@@ -874,6 +880,9 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         retry_count = 0
         if is_simple:
             orchestrator.transition(request.session_id, ResponseLifecycle.FINALIZED)
+        elif refinement_was_applied:
+            orchestrator.transition(request.session_id, ResponseLifecycle.FINALIZED)
+            logger.info("[Refine] Post-refinement validation skipped — already fixed.")
         else:
             validation = await asyncio.to_thread(orchestrator.validate_and_finalize, request.session_id)
             if not validation["is_valid"] and validation["repair_suffix"]:

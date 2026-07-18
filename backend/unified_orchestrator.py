@@ -223,6 +223,12 @@ class UnifiedOrchestrator:
 
     cleanup_session_for = cleanup_session
 
+    def set_buffer(self, session_id: str, text: str):
+        state = self._get_state(session_id)
+        with self._lock:
+            state.buffer = text
+            state.emitted_length = len(text)
+
     def reset_session(self, session_id: str):
         self.cleanup_session(session_id)
 

@@ -4,9 +4,9 @@ import re
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
-from backend.response_ranker import ResponseRanker
+from backend.response_ranker import ResponseRanker, CandidateResponse
 from backend.dsa_expert import DSAExpert, ExecutionTracer
 from backend.hallucination_guard import HallucinationGuard
 from backend.validation_engine import ResponseValidationEngine
@@ -315,6 +315,12 @@ class ReasoningPipeline:
         augmented_prompt = f"[REASONING]\n[INTERNAL PLANNING]{planning_block}\n\n{raw_context}"
         return augmented_prompt, trace
 
+    def _compute_quality_score(
+        self, response: str, user_message: str, context: str, steps: List[str]
+    ) -> float:
+        scored = self.ranker.score_candidate(response, user_message, context, steps)
+        return scored.total_score
+
     def refine(
         self,
         user_message: str,
@@ -328,9 +334,15 @@ class ReasoningPipeline:
             trace = self._last_trace or ReasoningTrace()
 
         t0 = time.perf_counter()
+        pre_refine = draft_response
+        modifications = []
 
         if candidates and len(candidates) > 1:
-            draft_response = self.ranker.rank(candidates, user_message, context, trace.steps)
+            best = self.ranker.rank(candidates, user_message, context, trace.steps)
+            if best != draft_response:
+                draft_response = best
+                modifications.append("selected_best_candidate")
+                logger.info("[ReasoningPipeline] Selected best candidate over primary")
 
         if self.url_verifier.has_any_urls(draft_response):
             trace.steps.append("URL verification: checking links in response")
@@ -347,18 +359,20 @@ class ReasoningPipeline:
             logger.warning("[ReasoningPipeline] Low confidence: %.3f", h_report.confidence_score)
             draft_response = self.guard.handle_uncertainty(draft_response, h_report, trace.intent_category)
             trace.draft_issues.extend(h_report.contradictions)
+            modifications.append("uncertainty_handled")
         if h_report.url_issues:
             trace.draft_issues.extend(h_report.url_issues)
             logger.warning("[ReasoningPipeline] URL issues: %s", h_report.url_issues)
 
         if report.needs_regeneration and allow_regeneration:
             logger.warning("[ReasoningPipeline] Critical issues — regeneration signaled.")
-            trace.refinement_applied = True
+            modifications.append("needs_regeneration")
 
         internal_reasoning, clean_response = self.extract_final_answer(draft_response)
         if internal_reasoning:
             logger.info("[ReasoningPipeline] Extracted reasoning (%d chars)", len(internal_reasoning))
             draft_response = clean_response
+            modifications.append("extracted_reasoning")
 
         if self.url_verifier.has_any_urls(draft_response):
             if h_report.url_issues:
@@ -366,20 +380,31 @@ class ReasoningPipeline:
                 for w in url_warnings:
                     trace.draft_issues.append(w)
                 draft_response = cleaned
-                trace.refinement_applied = True
+                modifications.append("urls_sanitized")
 
         if not report.is_valid:
             final = self.validator.repair(draft_response, report)
             final = self.rewriter.rewrite(final, trace, [i.message for i in report.issues])
-            trace.refinement_applied = True
+            modifications.append("validation_repair")
             logger.info("[ReasoningPipeline] Repair applied | Issues=%d", len(report.issues))
         else:
             final = self.rewriter._basic_cleanup(draft_response)
-            trace.refinement_applied = False
 
         final = self.refinement_middleware.refine_response(user_message, final)
 
+        quality_score = self._compute_quality_score(final, user_message, context, trace.steps)
+        if quality_score < self.threshold:
+            logger.info("[ReasoningPipeline] Quality score %.3f below threshold %.2f", quality_score, self.threshold)
+            if not report.is_valid:
+                modifications.append("quality_below_threshold")
+            elif report.needs_regeneration and allow_regeneration:
+                modifications.append("quality_below_threshold_needs_regen")
+
+        trace.refinement_applied = len(modifications) > 0
         trace.latency_ms += round((time.perf_counter() - t0) * 1000, 2)
+
+        if trace.refinement_applied:
+            logger.info("[ReasoningPipeline] Refinements applied: %s | quality=%.3f", modifications, quality_score)
         return final, trace
 
     def get_last_trace(self) -> Optional[ReasoningTrace]:
