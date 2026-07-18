@@ -27,12 +27,19 @@ env/
 data/feedback/*.db*
 data/feedback/*.db-shm
 data/feedback/*.db-wal
+backend/data/feedback/*.db*
+backend/data/feedback/*.db-shm
+backend/data/feedback/*.db-wal
 
 # Vector index
 *.faiss
-data/knowledge_base/index.faiss
-data/knowledge_base/metadata.json
-data/knowledge_base/manifest.json
+data/knowledge_base/
+backend/data/knowledge_base/
+
+# Test/evaluation data
+backend/data/*.json
+backend/data/*.pdf
+data/*.db*
 
 # IDE
 .vscode/
